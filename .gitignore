@@ -1,0 +1,9 @@
+apiv0.py
+apiconf.py
+Examples
+Release
+**.db
+**.log
+**.old
+**__pycache__
+**_config.py
