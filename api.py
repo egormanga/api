@@ -35,8 +35,7 @@ def ret(url, data=None, wrap=False, method='ret', max_tries=5):
 				VKAPIError(res['error'], method)
 			return res['response']
 		except Exception as ex:
-			if (type(ex) == VKAPIError and ex.args[0]['error_code'] in (6, 10, 14)): pass
-			else: raise
+			if (not wrap or (type(ex) == VKAPIError and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
 def api(method, wrap=True, max_tries=5, nolog=False, **kwargs):
 	parseargs(kwargs, v=api_version)
@@ -275,7 +274,8 @@ class lp(threading.Thread):
 		self.start()
 		lps.append(self)
 	@staticmethod
-	def format_url(server, key, ts='', wait=25, version=lp_version): return f"{server}?act=a_check&version={version}&key={key}&wait={wait}&ts={ts}"
+	def format_url(server, key, ts='', wait=25, version=lp_version):
+		return f"{server}?act=a_check&version={version}&key={key}&wait={wait}&ts={ts}"
 	@classmethod
 	def get_lp(cls, mode, wait=25, version=lp_version, **kwargs):
 		lp = API.groups.getLongPollServer(group_id=group.id, **kwargs) if (mode == 'group') else API.messages.getLongPollServer(lp_version=lp_version, **kwargs)
@@ -354,8 +354,7 @@ class _Tokens:
 		return name in self._tokens
 	def _set_scope(self, name, *scope):
 		scope, self._tokens[name]['scope'] = self._tokens[name]['scope'].copy(), set(scope)
-		if (self._tokens[name]['scope'] >= scope): self._tokens[name]['token'] = str(); return True
-		return False
+		return self._tokens[name]['scope'] != scope
 	@classmethod
 	def _in_scope(cls, scope, permission):
 		return permission in cls._scope_mask and scope & cls._scope_mask[permission]
@@ -366,8 +365,8 @@ class _Tokens:
 		self._tokens[name] = {'mode': mode or API.mode, 'scope': set(), 'token': str()}
 		self._set_scope(name, *scope)
 	def increment_scope(self, name, *scope, nolog=True):
-		scope = self._tokens[name]['scope'].union(Slist(map(lambda x: x.split('x'), scope)).flatten())
-		if (self._set_scope(name, *scope) and not nolog): logexception(Warning(f"Incremented {name} scope: {','.join(scope)}"), nolog=True)
+		scope = self._tokens[name]['scope'] | set(Slist(map(lambda x: x.split(','), scope)).flatten())
+		if (self._set_scope(name, *scope) and not nolog): logexception(Warning(f"Incremented {name} scope: {','.join(scope)}"), nolog=True); self.discard(name)
 	def discard(self, name):
 		self._tokens[name]['token'] = str()
 	@staticmethod
@@ -386,9 +385,11 @@ class _API: # scope=messages,groups,photos,status,docs,wall,offline
 		if (access_token not in tokens): access_token = 'service_key'; logexception(Warning(f"No {access_token} in tokens. Using service_key"), once=True, nolog=True)
 		try: return api(self.method, access_token=tokens[access_token], **kwargs)
 		except VKAPIError as ex:
-			if (ex.args[0]['error_code'] in {27, 28} or (ex.args[0]['error_code'] == 5 and '(4)' in ex.args[0]['error_msg']) and access_token != 'service_key'): tokens.discard(access_token)
-			elif (ex.args[0]['error_code'] == 15 and sys.flags.interactive): tokens.increment_scope(access_token, self.method.split('.')[0], nolog=False); return self(access_token=access_token, **kwargs)
-			raise
+			if (ex.args[0]['error_code'] in (27, 28) or (ex.args[0]['error_code'] == 5 and '(4)' in ex.args[0]['error_msg']) and access_token != 'service_key'): tokens.discard(access_token)
+			elif (ex.args[0]['error_code'] == 15): tokens.increment_scope(access_token, self.method.split('.')[0], nolog=False)
+			else: raise
+			if (sys.flags.interactive): return self(access_token=access_token, **kwargs)
+			else: raise
 	def __repr__(self):
 		return self.method or 'API'
 
