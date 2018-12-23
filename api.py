@@ -68,7 +68,8 @@ def attach(peer_id, file, type='doc', **kwargs):
 	if (Image.isImageType(file)): f = io.BytesIO(); file.save(f, type='png'); f.seek(0); file = f
 	if (type == 'photo'): return "photo{owner_id}_{id}".format_map(API.photos.saveMessagesPhoto(**requests.post(API.photos.getMessagesUploadServer(peer_id=peer_id, **kwargs)['upload_url'], files={'photo': file}).json())[0])
 	return "doc{owner_id}_{id}".format_map(API.docs.save(**requests.post(API.docs.getMessagesUploadServer(peer_id=peer_id, type=type, **kwargs)['upload_url'], files={'photo' if (type == 'photo') else 'file': file}).json())[0])
-def settyping(peer_id=int(), type='typing', **kwargs): parseargs(kwargs, peer_id=peer_id, type=type); return API.messages.setActivity(**kwargs)
+def setactivity(peer_id, type, **kwargs): parseargs(kwargs, peer_id=peer_id, type=type); return API.messages.setActivity(**kwargs)
+def settyping(peer_id, type='typing', **kwargs): logexception(DeprecationWarning("*** settyping() → setactivity(type='typing') ***")); parseargs(kwargs, peer_id=peer_id, type=type); return setactivity(**kwargs)
 
 commands = dict()
 def sendhelp(peer_id, commands=commands, n=4, head='', title='Доступные команды:', tail='', keyboard=True, display=2, **kwargs): return send(peer_id, f"{head}\n\n{title}\n%s\n\n{tail}" % '\n'.join('%s — %s' % (i[0]+(' (%s)' % ', '.join(i[1:display])) if (display > 1) else '', i[-2]) for i in commands if i[-1] > -1), keyboard=mkkeyboard(commands, n, one_time=False) if (keyboard and API.mode == 'group') else '', **kwargs) # •
@@ -139,7 +140,7 @@ def groups(group_ids='', **kwargs):
 	return API.groups.getById(**kwargs)
 
 def chat(chat_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return API.messages.getChat(**kwargs)
-def chatonline(chat_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return execute('var users = API.messages.getChat({"chat_id": Args.chat_id, "fields": "online"})["users"]@.online, count = 0; while (users) count = count + parseInt(users.pop()); return count;', **kwargs)
+def chatonline(chat_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return execute('return API.messages.getChat({"chat_id": Args.chat_id, "fields": "online"}).users@.online;', **kwargs).count(1)
 def chatadd(chat_id, user_ids, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000), user_id=user_ids); return Slist([execute('var ret = [], user_ids = Args.user_ids.split(","); while (user_ids) ret.push(API.messages.addChatUser({"chat_id": Args.chat_id, "user_id": user_ids.pop()})); return ret;', user_ids=i, **kwargs) for i in Slist(user_ids).group(25)]).combine() if (hasattr(user_ids, '__iter__') and type(user_ids) != str) else API.messages.addChatUser(**kwargs)
 def chatkick(chat_id, member_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000), member_id=member_id); return API.messages.removeChatUser(**kwargs)
 def chatinvitelink(peer_id, **kwargs): parseargs(kwargs, peer_id=peer_id); return API.messages.getInviteLink(**kwargs)
