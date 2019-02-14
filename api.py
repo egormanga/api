@@ -1,8 +1,9 @@
 #!/usr/bin/python3
-# VK API lib v1.2
+# VK API lib v1.3
 
 import json, requests
 from .apiconf import app_id, api_service_key
+from bs4 import BeautifulSoup as bs4
 from PIL import Image
 from utils import *; logstart('API')
 
@@ -23,7 +24,7 @@ def main():
 		except KeyboardInterrupt as ex: exit(ex)
 (not a bare minimum though) """
 
-api_version = '5.85'
+api_version = '5.89'
 lp_version = '3'
 
 def ret(url, data=None, wrap=False, method='ret', max_tries=5):
@@ -64,8 +65,15 @@ def openimg(img):
 	except: pass
 	raise \
 		FileNotFoundError(img)
+def saveimg(img):
+	if (Image.isImageType(img)): f = io.BytesIO(); f.name = 'saveimg.png'; img.save(f); f.seek(0); return f
+	if (isinstance(img, io.IOBase)): return img
+	try: f = requests.get(img, stream=True).raw; f.name = 'saveimg.png'; return f
+	except: pass
+	return saveimg(openimg(img))
+
 def attach(peer_id, file, type='doc', **kwargs):
-	if (Image.isImageType(file)): f = io.BytesIO(); file.save(f, type='png'); f.seek(0); file = f
+	file = saveimg(file)
 	if (type == 'photo'): return "photo{owner_id}_{id}".format_map(API.photos.saveMessagesPhoto(**requests.post(API.photos.getMessagesUploadServer(peer_id=peer_id, **kwargs)['upload_url'], files={'photo': file}).json())[0])
 	return "doc{owner_id}_{id}".format_map(API.docs.save(**requests.post(API.docs.getMessagesUploadServer(peer_id=peer_id, type=type, **kwargs)['upload_url'], files={'photo' if (type == 'photo') else 'file': file}).json())[0])
 def setactivity(peer_id, type, **kwargs): parseargs(kwargs, peer_id=peer_id, type=type); return API.messages.setActivity(**kwargs)
@@ -145,7 +153,7 @@ def chatadd(chat_id, user_ids, **kwargs): parseargs(kwargs, chat_id=(chat_id % 1
 def chatkick(chat_id, member_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000), member_id=member_id); return API.messages.removeChatUser(**kwargs)
 def chatinvitelink(peer_id, **kwargs): parseargs(kwargs, peer_id=peer_id); return API.messages.getInviteLink(**kwargs)
 def chattitle(chat_id, title, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000), title=title); return API.messages.editChat(**kwargs)
-def chatphoto(chat_id, photo, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return API.messages.setChatPhoto(file=requests.post(API.photos.getChatUploadServer(**kwargs)['upload_url'], files={'photo': photo}).json()['response'], **kwargs)
+def chatphoto(chat_id, photo, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return API.messages.setChatPhoto(file=requests.post(API.photos.getChatUploadServer(**kwargs)['upload_url'], files={'photo': saveimg(photo)}).json()['response'], **kwargs)
 
 def friends(user_id=0, **kwargs): parseargs(kwargs, user_id=user_id); return API.friends.get(**kwargs)
 
@@ -166,33 +174,42 @@ def setonline(x=True, nolog=True, **kwargs):
 	except Exception as ex:
 		if (not nolog): logex(ex)
 
-def setcover(photo, **kwargs): parseargs(kwargs, group_id=group.id, crop_x2=1590, crop_y2=400); return API.photos.saveOwnerCoverPhoto(**requests.post(API.photos.getOwnerCoverPhotoUploadServer(**kwargs)['upload_url'], files={'photo': photo}).json())
+def setcover(photo, **kwargs): parseargs(kwargs, group_id=group.id, crop_x2=1590, crop_y2=400); return API.photos.saveOwnerCoverPhoto(**requests.post(API.photos.getOwnerCoverPhotoUploadServer(**kwargs)['upload_url'], files={'photo': saveimg(photo)}).json())
 
 def execute(code, **kwargs): parseargs(kwargs, code=code); return API.execute(**kwargs)
 
+def loginforsid(login, password):
+	s = requests.session()
+	s.post(bs4(s.get('https://m.vk.com/login').text, 'html.parser').form['action'], data={'email': login, 'pass': password})
+	return s.cookies['remixsid']
+
+def copy_message(m, peer_id, stickers_size=-1, **kwargs):
+	if (m.get('fwd_messages')): m['text'] += "\n\n[Пересланные сообщения]\n"+'\n'.join(S(refuser(i['from_id'], nopush=True, fullname=True)+': '+format_message(i)).indent(1, char='⠀| ') for i in m['fwd_messages'])
+	return send(peer_id, m['text'], attachment=copy_attachments(m, peer_id, stickers_size=stickers_size), **kwargs)
 def copy_post(post, **kwargs): # TODO: use copy_attachments
 	if (type(post) != dict): post = API.wall.getById(posts=str(post).replace('wall', ''), **kwargs)[0]
 	return (post['text'], ','.join(f"{i['type']}{i[i['type']].get('owner_id') or ''}_{i[i['type']].get('id') or ''}_{i[i['type']].get('access_key') or ''}".strip('_') for i in post.get('attachments') or ()), f"vk.com/wall{post['owner_id']}_{post['id']}")
-def copy_attachments(m, peer_id): # used in NyaBot, so fix there too.
+def copy_attachments(m, peer_id, stickers_size=-1):
 	a = list()
 	for i in m.get('attachments') or ():
-		if (i['type'] == 'sticker'): a.append(attach(peer_id, openimg(i[i['type']]['images'][-1]['url']), type='photo'))
-		a['attachment'].append(i['type']+'_'.join(map(str, S(i[i['type']])@['owner_id', 'id', 'access_key'])))
+		if (i['type'] == 'sticker'):
+			if (stickers_size): a.append(attach(peer_id, i[i['type']]['images'][stickers_size]['url'], type='photo'))
+		else: a.append(i['type']+'_'.join(map(str, S(i[i['type']])@['owner_id', 'id', 'access_key'])))
 	return ','.join(a)
 def format_message(m):
 	types = {
-		'photo': ('фотография', 'фотографии', 'фотографий'),
-		'video': ('видеозапись', 'видеозаписи', 'видеозаписей'),
-		'audio': ('аудиозапись', 'аудиозаписи', 'аудиозаписей'),
-		'doc': ('документ', 'документа', 'документов'),
-		'link': ('ссылка', 'ссылки', 'ссылок'),
-		'market': ('товар', 'товара', 'товаров'),
-		'market_album': ('подборка товаров', 'подборки товаров', 'подборок товаров'),
-		'wall': ('запись на стене', 'записи на стене', 'записей на стене'),
-		'wall_reply': ('комментарий на стене', 'комментария на стене', 'комментариев на стене'),
-		'sticker': ('стикер', 'стикера', 'стикеров'),
-		'gift': ('подарок', 'подарка', 'подарков'),
-		'call': ('звонок', 'звонка', 'звонков'),
+		'photo':	('фотография', 'фотографии', 'фотографий'),
+		'video':	('видеозапись', 'видеозаписи', 'видеозаписей'),
+		'audio':	('аудиозапись', 'аудиозаписи', 'аудиозаписей'),
+		'doc':		('документ', 'документа', 'документов'),
+		'link':		('ссылка', 'ссылки', 'ссылок'),
+		'market':	('товар', 'товара', 'товаров'),
+		'market_album':	('подборка товаров', 'подборки товаров', 'подборок товаров'),
+		'wall':		('запись на стене', 'записи на стене', 'записей на стене'),
+		'wall_reply':	('комментарий на стене', 'комментария на стене', 'комментариев на стене'),
+		'sticker':	('стикер', 'стикера', 'стикеров'),
+		'gift':		('подарок', 'подарка', 'подарков'),
+		'call':		('звонок', 'звонка', 'звонков'),
 	}
 	attachments = Sdict(int)
 	for i in m['attachments']: attachments[i['type']] += 1
@@ -215,7 +232,7 @@ def command_unknown(f):
 f_proc = list()
 def proc(n):
 	global f_proc, n_proc
-	if (type(n) == int):
+	if (isinteger(n)):
 		def decorator(f):
 			global f_proc
 			f_proc.append([f, n, int()])
@@ -250,6 +267,7 @@ def handle_command(t, m):
 		if (c[0] in i[:-2] or m['text'].replace(' ', '\s') in i[:-2]): return exec_command(commands[i], c, m, t)
 	else:
 		if ((-1,) in commands): return exec_command(commands[(-1,)], c, m, t)
+	return... # :(
 def exec_command(f, c, m, t, *args, **kwargs):
 	fields = ('peer_id', 'from_id', 'text', 'attachments')
 	globals = f.__globals__
@@ -259,12 +277,7 @@ def exec_command(f, c, m, t, *args, **kwargs):
 		for field in fields:
 			if (field in globals): del globals[field]
 
-def setlp(**kwargs):
-	parseargs(kwargs, enabled=1, message_new=1, group_id=group.id)
-	logstart('Setting up LP')
-	try: return API.groups.setLongPollSettings(**kwargs)
-	except Exception as ex: return logex(ex)
-	finally: logok()
+def setlp(**kwargs): parseargs(kwargs, enabled=1, message_new=1, group_id=group.id); return API.groups.setLongPollSettings(**kwargs)
 lps = list()
 class lp(threading.Thread):
 	def __init__(self, lp_index=0, lp_timeout=1, mode=None, eq=None, **kwargs):
@@ -279,6 +292,7 @@ class lp(threading.Thread):
 		return f"{server}?act=a_check&version={version}&key={key}&wait={wait}&ts={ts}"
 	@classmethod
 	def get_lp(cls, mode, wait=25, version=lp_version, **kwargs):
+		parseargs(kwargs, nolog=True)
 		lp = API.groups.getLongPollServer(group_id=group.id, **kwargs) if (mode == 'group') else API.messages.getLongPollServer(lp_version=lp_version, **kwargs)
 		return (cls.format_url(server=(lp['server'] if (mode == 'group') else 'https://'+lp['server']), key=lp['key'], wait=wait), str(lp['ts']))
 	def run(self):
@@ -419,7 +433,21 @@ send = _send()
 group = _group()
 if (sys.flags.interactive): tokens.require('access_token')
 
-if (__name__ == '__main__'): logstarted(); exit('Nope.')
+if (__name__ == '__main__'):
+	logstarted()
+	setonsignals(exit)
+	handler(plog)
+	tokens.require('access_token', 'messages')
+	exceptions = queue.Queue()
+	lp(eq=exceptions)
+	while (True):
+		try:
+			try: ex = exceptions.get()
+			except queue.Empty: pass
+			except TypeError: raise KeyboardInterrupt()
+			else: raise ex
+		except Exception as ex: exception(ex)
+		except KeyboardInterrupt as ex: exit(ex)
 else: logimported()
 
-# by Sdore, 2018
+# by Sdore, 2019
