@@ -1,8 +1,8 @@
 #!/usr/bin/python3
-# VK API lib v1.3
+# VK API lib v1.4
 
 import json, requests
-from .apiconf import app_id, api_service_key
+from .apiconf import app_id, al_im_hash, api_service_key
 from bs4 import BeautifulSoup as bs4
 from PIL import Image
 from utils import *; logstart('API')
@@ -26,6 +26,14 @@ def main():
 
 api_version = '5.89'
 lp_version = '3'
+use_al_apis = { # {'mask': use_for_group
+	'audio.*': True,
+	'messages.send': False,
+	'messages.edit': False,
+	'messages.delete': False,
+	'messages.setActivity': False,
+	'messages.getLongPollServer': False,
+}
 
 def ret(url, data=None, wrap=False, method='ret', max_tries=5):
 	for i in range(max_tries if (wrap) else 1):
@@ -38,13 +46,66 @@ def ret(url, data=None, wrap=False, method='ret', max_tries=5):
 		except Exception as ex:
 			if (not wrap or (type(ex) == VKAPIError and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
-def api(method, wrap=True, max_tries=5, nolog=False, **kwargs):
+def api(method, mode='user', wrap=True, max_tries=5, nolog=False, **kwargs): # TODO: move api() & ret() into API [maybe.]
 	parseargs(kwargs, v=api_version)
 	if (not method): return False
+	use_al = use_al_apis.get(method) or use_al_apis.get(method.partition('.')[0]+'.*')
+	if (use_al is not None and (use_al or mode == 'user')): return al(method, nolog=nolog, **kwargs)
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
 	r = ret("https://api.vk.com/method/"+method, data=kwargs, wrap=wrap, method=method, max_tries=max_tries)
 	if (not nolog): log(3, f"Response: {r}")
 	return r
+
+vk_sid = str()
+def setvksid(vk_sid_): global vk_sid; vk_sid = vk_sid_
+def getvksid(): return vk_sid
+al_actions = {
+	'audio.get': ('audio', 'load_section'),
+	'messages.send': ('im', 'a_send'),
+	'messages.edit': ('im', 'a_edit_message'),
+	'messages.delete': ('im', 'a_mark'),
+	'messages.setActivity': ('im', 'a_activity'),
+}
+al_params = {
+	'audio.get': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'type': 'playlist', 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', '')},
+	'messages.send': lambda kwargs: {'to': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': kwargs.get('attachment', '')},
+	'messages.edit': lambda kwargs: {'peerId': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': kwargs.get('attachment', ''), 'id': kwargs.get('message_id', '')},
+	'messages.delete': lambda kwargs: {'peer': kwargs.get('peer_id', ''), 'msgs_ids': kwargs.get('message_ids', ''), 'mark': 'deleteforall' if (kwargs.get('delete_for_all', False)) else 'delete'},
+	'messages.setActivity': lambda kwargs: {'peer': kwargs.get('peer_id', ''), 'type': kwargs.get('type', '')},
+}
+al_return = {
+	'audio.get': lambda r: json.loads(r), # TODO FIXME
+	'messages.send': lambda r: json.loads(r)['msg_id'],
+	'messages.edit': lambda r: json.loads(r)['msg_id'],
+	'messages.delete': lambda r: int(r),
+	'messages.setActivity': lambda r: int(r),
+}
+def al(method, vk_sid_=None, nolog=False, **kwargs):
+	if (vk_sid_ is None): vk_sid_ = vk_sid
+	if (method == 'messages.getLongPollServer'): return al_get_lp(vk_sid_)
+	al, act = al_actions.get(method, method.partition('.')[::2])
+	kwargs = al_params.get(method, lambda x: x)(kwargs)
+	if (method.partition('.')[0] == 'messages'): parseargs(kwargs, im_v=2, hash=al_im_hash)
+	parseargs(kwargs, al=1)
+	if (not al or not act): return False
+	if (not nolog): log(2, f"Al Request: al={al}, act={act}, data={kwargs}")
+	e = None
+	try: r = al_return.get(method, lambda x: x)(regex.search(r'<!(?| json | int)>(?| (.*?)<!> | (.*))', requests.post(f"https://vk.com/al_{al}.php?act={act}", data=kwargs, cookies={'remixsid': vk_sid_}).text, regex.X)[1])
+	except Exception as ex: e = ex
+	if (e): raise \
+		VKAPIError({'error_code': 0, 'error_msg': repr(e)}, method)
+	if (not nolog): log(3, f"Al Response: {r}")
+	return r
+def al_login(login, password):
+	global vk_sid
+	s = requests.session()
+	s.post(bs4(s.get('https://m.vk.com/login').text, 'html.parser').form['action'], data={'email': login, 'pass': password})
+	vk_sid = s.cookies['remixsid']
+def al_login_stdin(): return al_login(input('VK Login: '), getpass.getpass())
+def al_get_lp(vk_sid_=None):
+	if (vk_sid_ is None): vk_sid_ = vk_sid
+	r = json.loads(re.search(r'im\.init\(({.*?})\)', requests.get('https://vk.com/im', cookies={'remixsid': vk_sid_, 'remixmdevice': '0/0/0/!'}).text, re.S)[1])
+	return {'server': r['url'], 'key': r['key'], 'ts': r['ts']}
 
 class _send:
 	def __init__(self):
@@ -80,7 +141,7 @@ def setactivity(peer_id, type, **kwargs): parseargs(kwargs, peer_id=peer_id, typ
 def settyping(peer_id, type='typing', **kwargs): logexception(DeprecationWarning("*** settyping() → setactivity(type='typing') ***")); parseargs(kwargs, peer_id=peer_id, type=type); return setactivity(**kwargs)
 
 commands = dict()
-def sendhelp(peer_id, commands=commands, n=4, head='', title='Доступные команды:', tail='', keyboard=True, display=2, **kwargs): return send(peer_id, f"{head}\n\n{title}\n%s\n\n{tail}" % '\n'.join('%s — %s' % (i[0]+(' (%s)' % ', '.join(i[1:display])) if (display > 1) else '', i[-2]) for i in commands if i[-1] > -1), keyboard=mkkeyboard(commands, n, one_time=False) if (keyboard and API.mode == 'group') else '', **kwargs) # •
+def sendhelp(peer_id, commands=commands, n=4, head='', title='Доступные команды:', tail='', keyboard=True, display=2, **kwargs): return send(peer_id, f"{head}\n\n{title}\n%s\n\n{tail}" % '\n'.join('%s — %s' % (i[0]+(' (%s)' % ', '.join(i[1:display])) if (display > 1) else '', i[-2]) for i in commands if i[-1] > -1), keyboard=mkkeyboard(commands if (keyboard) else {}, n, one_time=keyboard) if (API.mode == 'group') else '', **kwargs) # •
 def mkkeyboard(commands, n=4, one_time=True):
 	keyboard = {
 		'one_time': one_time,
@@ -177,11 +238,6 @@ def setonline(x=True, nolog=True, **kwargs):
 def setcover(photo, **kwargs): parseargs(kwargs, group_id=group.id, crop_x2=1590, crop_y2=400); return API.photos.saveOwnerCoverPhoto(**requests.post(API.photos.getOwnerCoverPhotoUploadServer(**kwargs)['upload_url'], files={'photo': saveimg(photo)}).json())
 
 def execute(code, **kwargs): parseargs(kwargs, code=code); return API.execute(**kwargs)
-
-def loginforsid(login, password):
-	s = requests.session()
-	s.post(bs4(s.get('https://m.vk.com/login').text, 'html.parser').form['action'], data={'email': login, 'pass': password})
-	return s.cookies['remixsid']
 
 def copy_message(m, peer_id, stickers_size=-1, **kwargs):
 	if (m.get('fwd_messages')): m['text'] += "\n\n[Пересланные сообщения]\n"+'\n'.join(S(refuser(i['from_id'], nopush=True, fullname=True)+': '+format_message(i)).indent(1, char='⠀| ') for i in m['fwd_messages'])
@@ -398,7 +454,7 @@ class _API: # scope=messages,groups,photos,status,docs,wall,offline
 		return self.__class__((self.method+'.'+method).strip('.'))
 	def __call__(self, *, access_token='access_token', **kwargs):
 		if (access_token not in tokens): access_token = 'service_key'; logexception(Warning(f"No {access_token} in tokens. Using service_key"), once=True, nolog=True)
-		try: return api(self.method, access_token=tokens[access_token], **kwargs)
+		try: return api(self.method, mode=self.mode, access_token=tokens[access_token], **kwargs)
 		except VKAPIError as ex:
 			if (ex.args[0]['error_code'] in (27, 28) or (ex.args[0]['error_code'] == 5 and '(4)' in ex.args[0]['error_msg']) and access_token != 'service_key'): tokens.discard(access_token)
 			elif (ex.args[0]['error_code'] == 15): tokens.increment_scope(access_token, self.method.split('.')[0], nolog=False)
@@ -427,7 +483,7 @@ class _group:
 		return self._group[x]
 
 tokens = _Tokens(service_key=service_key)
-db.register('tokens')
+db.register('tokens', 'vk_sid')
 API = _API()
 send = _send()
 group = _group()
@@ -438,6 +494,7 @@ if (__name__ == '__main__'):
 	setonsignals(exit)
 	handler(plog)
 	tokens.require('access_token', 'messages')
+	al_login_stdin()
 	exceptions = queue.Queue()
 	lp(eq=exceptions)
 	while (True):
