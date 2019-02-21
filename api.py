@@ -1,7 +1,7 @@
 #!/usr/bin/python3
-# VK API lib v1.4
+# VK API lib
 
-import json, requests
+import requests
 from .apiconf import app_id, al_im_hash, api_service_key
 from bs4 import BeautifulSoup as bs4
 from PIL import Image
@@ -402,21 +402,10 @@ class _Tokens:
 		self._tokens = tokens
 	def __getattr__(self, name):
 		if (not self._tokens[name]['token']):
-			self._tokens[name]['token'] = ...
+			#self._tokens[name]['token'] = ... # ???
 			mode, scope = S(self._tokens[name])@['mode', 'scope']
-			locklog()
-			logexception(Warning(f"""Get new {name}: 
-				https://oauth.vk.com/authorize?
-				client_id={app_id}&
-				redirect_uri=https://oauth.vk.com/blank.html&
-				{f"group_ids={group.id}&" if (mode == 'group') else ''}
-				{f"scope={','.join(scope)}&" if (scope) else ''}
-				response_type=token&
-				v={api_version}""".replace('\t', '').replace('\n', '')
-			), nolog=True)
-			logdumb(unlock=loglock[-1][0])
-			self._tokens[name]['token'] = str()
-			self._tokens[name]['token'] = input(name+' = ')
+			#self._tokens[name]['token'] = str() # ???
+			self._tokens[name]['token'] = self.readtoken(name, self.format_link(mode, scope))
 			if (self._tokens[name]['mode'] == 'user'): self._set_scope(name, *self._parse_mask(API.account.getAppPermissions(access_token=name)))
 			self.onupdate()
 		return self._tokens[name]['token']
@@ -441,7 +430,22 @@ class _Tokens:
 	def discard(self, name):
 		self._tokens[name]['token'] = str()
 	@staticmethod
-	def onupdate(): pass
+	def format_link(mode, scope):
+		return f"""
+			https://oauth.vk.com/authorize?
+			client_id={app_id}&
+			redirect_uri=https://oauth.vk.com/blank.html&
+			{f"group_ids={group.id}&" if (mode == 'group') else ''}
+			{f"scope={','.join(scope)}&" if (scope) else ''}
+			response_type=token&
+			v={api_version}
+		""".replace('\t', '').replace('\n', '')
+	def readtoken(self, name, link):
+		locklog()
+		logexception(Warning(f"Get new {name}: {link}"), nolog=True)
+		logdumb(unlock=loglock[-1][0])
+		return input(name+' = ')
+	def onupdate(self): pass
 access_token, admin_token, service_key = 'access_token', 'admin_token', 'service_key'
 group_scope_all = 'manage,messages,photos,docs,wall'
 
