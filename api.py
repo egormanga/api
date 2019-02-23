@@ -207,6 +207,7 @@ def proc_cmd(c): return (re.sub(rf'\[(?:club{group.id}|{group.screen_name})\|.*?
 def groups(group_ids='', **kwargs):
 	parseargs(kwargs, group_ids=group_ids, fields='')
 	return API.groups.getById(**kwargs)
+def ismember(group_id, user_ids, **kwargs): return API.groups.isMember(group_id=group_id, user_ids=user_ids, **kwargs)
 
 def chat(chat_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return API.messages.getChat(**kwargs)
 def chatonline(chat_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return execute('return API.messages.getChat({"chat_id": Args.chat_id, "fields": "online"}).users@.online;', **kwargs).count(1)
@@ -316,7 +317,10 @@ def handle(u):
 	log(2, u)
 	if ((u['type'] if (type(u) == dict) else u[0]) in (4, 5, 'message_new', 'message_edit')): return handle_command(*((u['type'], u['object']) if (type(u) == dict) else (u[0], message(u[1], nolog=True)['items'][0])))
 	else: log(1, "Unhandled event"+(f" {u['type']}: {u['object']}" if (type(u) == dict) else f": {u}"))
+_users_filter = lambda peer_id, from_id: True
+def filter_users(func): global _users_filter; _users_filter = func
 def handle_command(t, m):
+	if (not _users_filter(*S(m)@['peer_id', 'from_id'])): log(2, f"Rejected from {m['from_id']} (filtered)"); return 'filtered'
 	c = proc_cmd(m['text'])
 	if (not c): c = ['']
 	for i in commands:
