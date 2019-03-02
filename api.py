@@ -33,7 +33,43 @@ use_al_apis = { # {'mask': use_for_group
 	'messages.delete': False,
 	'messages.setActivity': False,
 	'messages.getLongPollServer': False,
+	'messages.getConversations': False,
+	'messages.getHistoryAttachments': False,
 }
+
+
+class al_audio_consts:
+	AUDIO_ITEM_INDEX_ID = 0
+	AUDIO_ITEM_INDEX_OWNER_ID = 1
+	AUDIO_ITEM_INDEX_URL = 2
+	AUDIO_ITEM_INDEX_TITLE = 3
+	AUDIO_ITEM_INDEX_PERFORMER = 4
+	AUDIO_ITEM_INDEX_DURATION = 5
+	AUDIO_ITEM_INDEX_ALBUM_ID = 6
+	AUDIO_ITEM_INDEX_AUTHOR_LINK = 8
+	AUDIO_ITEM_INDEX_LYRICS = 9
+	AUDIO_ITEM_INDEX_FLAGS = 10
+	AUDIO_ITEM_INDEX_CONTEXT = 11
+	AUDIO_ITEM_INDEX_EXTRA = 12
+	AUDIO_ITEM_INDEX_HASHES = 13
+	AUDIO_ITEM_INDEX_COVER_URL = 14
+	AUDIO_ITEM_INDEX_ADS = 15
+	AUDIO_ITEM_INDEX_SUBTITLE = 16
+	AUDIO_ITEM_INDEX_MAIN_ARTISTS = 17
+	AUDIO_ITEM_INDEX_FEAT_ARTISTS = 18
+	AUDIO_ITEM_INDEX_ALBUM = 19
+	AUDIO_ITEM_INDEX_TRACK_CODE = 20
+	AUDIO_ITEM_INDEX_RESTRICTION = 21
+	AUDIO_ITEM_INDEX_ALBUM_PART = 22
+	AUDIO_ITEM_INDEX_NEW_STATS = 23
+	AUDIO_ITEM_HAS_LYRICS_BIT = 1
+	AUDIO_ITEM_CAN_ADD_BIT = 2
+	AUDIO_ITEM_CLAIMED_BIT = 4
+	AUDIO_ITEM_HQ_BIT = 64#16
+	AUDIO_ITEM_LONG_PERFORMER_BIT = 32
+	AUDIO_ITEM_UMA_BIT = 128
+	AUDIO_ITEM_REPLACEABLE = 512
+	AUDIO_ITEM_EXPLICIT_BIT = 1024
 
 def ret(url, data=None, wrap=False, method='ret', max_tries=5):
 	for i in range(max_tries if (wrap) else 1):
@@ -49,7 +85,7 @@ def ret(url, data=None, wrap=False, method='ret', max_tries=5):
 def api(method, mode='user', wrap=True, max_tries=5, nolog=False, **kwargs): # TODO: move api() & ret() into API [maybe.]
 	parseargs(kwargs, v=api_version)
 	if (not method): return False
-	use_al = use_al_apis.get(method) or use_al_apis.get(method.partition('.')[0]+'.*')
+	use_al = use_al_apis.get(method, use_al_apis.get(method.partition('.')[0]+'.*'))
 	if (use_al is not None and (use_al or mode == 'user')): return al(method, nolog=nolog, **kwargs)
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
 	r = ret("https://api.vk.com/method/"+method, data=kwargs, wrap=wrap, method=method, max_tries=max_tries)
@@ -59,41 +95,173 @@ def api(method, mode='user', wrap=True, max_tries=5, nolog=False, **kwargs): # T
 vk_sid = str()
 def setvksid(vk_sid_): global vk_sid; vk_sid = vk_sid_
 def getvksid(): return vk_sid
+
+def al_extract(r): return regex.findall(r'<!\w+>(.*?)<!>', r)
+def al_unhtml_text(text): return html.unescape(re.sub(r'<.*?alt="(.*?)">', r'\1', text)).replace('\xa0', ' ').replace('<br>', '\n')
+def al_parse_attachments(a):
+	try: return [{'type': a[i+'_type'], a[i+'_type']: (
+		API.photos.getById(photos=a[i]) if (a[i+'_type'] == 'photo') else
+		API.video.get(videos=a[i]) if (a[i+'_type'] == 'video') else
+		API.audio.getById(audios=a[i]) if (a[i+'_type'] == 'audio') else
+		API.docs.getById(docs=a[i]) if (a[i+'_type'] == 'doc') else
+		API.wall.getById(posts=a[i]) if (a[i+'_type'] == 'wall') else
+		a[i]
+	)} for i in a if re.match(r'attach\d+$', i)]
+	except VKAPIError: return []
+def al_parse_audio(a):
+	return {
+		'id': a[al_audio_consts.AUDIO_ITEM_INDEX_ID],
+		'owner_id': a[al_audio_consts.AUDIO_ITEM_INDEX_OWNER_ID],
+		'artist': al_unhtml_text(a[al_audio_consts.AUDIO_ITEM_INDEX_PERFORMER]),
+		'title': al_unhtml_text(a[al_audio_consts.AUDIO_ITEM_INDEX_TITLE]),
+		'duration': a[al_audio_consts.AUDIO_ITEM_INDEX_DURATION],
+		#'date'
+		'url': a[al_audio_consts.AUDIO_ITEM_INDEX_URL], # TODO vaud
+		'lyrics_id': a[al_audio_consts.AUDIO_ITEM_INDEX_LYRICS],
+		'album_id': a[al_audio_consts.AUDIO_ITEM_INDEX_ALBUM],
+		#'genre_id'
+		'is_hq': a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_HQ_BIT,
+		'track_code': a[al_audio_consts.AUDIO_ITEM_INDEX_TRACK_CODE],
+		'is_explicit': a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_EXPLICIT_BIT,
+		'main_artists': a[al_audio_consts.AUDIO_ITEM_INDEX_MAIN_ARTISTS],
+		'featured_artists': a[al_audio_consts.AUDIO_ITEM_INDEX_FEAT_ARTISTS],
+		'subtitle': a[al_audio_consts.AUDIO_ITEM_INDEX_SUBTITLE],
+		#'no_search'
+		'hashes': dict(zip(('addHash', 'editHash', 'actionHash', 'deleteHash', 'replaceHash', 'urlHash', 'restoreHash'), a[al_audio_consts.AUDIO_ITEM_INDEX_HASHES].split('/'))),
+		'raw_data': a,
+	}
+def al_parse_audio_id(a): return f"{a['owner_id']}_{a['id']}_{a['hashes']['actionHash']}_{a['hashes']['urlHash']}"
+
+def al_parse_audio_list(kwargs, r):
+	r = json.loads(al_extract(r)[0])
+	r['list'] = list(map(al_parse_audio, r['list']))
+	return S(r).translate({'has_more': ('hasMore', bool), 'next_from': 'nextOffset'})
+def al_parse_dialogs(kwargs, r):
+	r = tuple(map(json.loads, al_extract(r)))
+	return {
+		#'count'
+		'items': [{
+			'conversation': {
+				'peer': {
+					'id': i['peerId'],
+					'type': 'group' if (i['peerId'] < 0) else 'chat' if (i['peerId'] > 2000000000) else 'user',
+					#'local_id'
+				},
+				'in_read': i['in_up_to'],
+				'out_read': i.get('out_up_to'),
+				'last_message_id': i['lastmsg_meta'][0],
+				#'unread_count'
+				'can_write': {
+					#'allowed'
+				},
+				'chat_settings': {
+					'title': al_unhtml_text(i['tab']),
+					#'pinned_message'
+					'members_count': i.get('membersCount'),
+					#'state'
+					'photo': {j: i.get('photo') for j in ('photo_50', 'photo_100', 'photo_200')},# if (i.get('photo')) else S(user(i['peerId'], fields='photo_50,photo_100,photo_200', groups=True)[0])@['photo_50', 'photo_100', 'photo_200'], # too long
+					'active_ids': i.get('data', {}).get('active'),
+					#'acl'
+					#'is_group_channel'
+					'owner_id': i.get('ownerId'),
+				},
+				'push_settings': {
+					#'no_sound'
+					#'disabled_until'
+					#'disabled_forever'
+				}
+			},
+			'last_message': {
+				#'date'
+				'from_id': i['lastmsg_meta'][5].get('from') if (isinstance(i['lastmsg_meta'][5], dict)) else None,
+				'id': i['lastmsg_meta'][0],
+				'out': i['lastmsg_meta'][1] & +2,
+				'peer_id': i['lastmsg_meta'][2],
+				'text': al_unhtml_text(i['lastmsg_meta'][4]),
+				'conversation_message_id': i['lastmsg_meta'][8],
+				#'fwd_messages'
+				'important': i['lastmsg_meta'][1] & +8,
+				'random_id': i['lastmsg_meta'][7],
+				'attachments': al_parse_attachments(i['lastmsg_meta'][5]) if (kwargs.get('parse_attachments')) else [],
+				'is_hidden': i['lastmsg_meta'][1] & +65536,
+			}
+		} for i in r[1].values()],
+		#'unread_count'
+		'profiles': user(S(r[2])@['id']) if (kwargs.get('extended')) else [],
+		'groups': groups(-i for i in S(r[2])@['id'] if i < 0) if (kwargs.get('extended')) else [],
+		'offset': r[0]['offset'],
+		'has_more': r[0]['has_more'],
+	}
+def al_parse_history_attachments(kwargs, r):
+	count, offset = S(json.loads(al_extract(r)[1]))@['count', 'offset']
+	if (kwargs['media_type'] == 'audio'):
+		res = list()
+		l = [al_parse_audio_id(al_parse_audio(json.loads(html.unescape(i)))) for i in re.findall(r'data-audio="(\[.*\])"', r)]
+		for i in range(0, len(l), 9): res += API.audio.getById(audios=','.join(l[i:i+10]))
+		res = list(map(al_parse_audio, res))
+	else: raise NotImplementedError(kwargs['media_type'])
+	return {
+		'count': count,
+		'items': [{
+			#'message_id'
+			'attachment': {
+				'type': kwargs['media_type'],
+				kwargs['media_type']: i,
+			},
+		} for i in res],
+		'next_from': offset,
+		'has_more': count > offset,
+	}
+
 al_actions = {
-	'audio.get': ('audio', 'load_section'),
-	'messages.send': ('im', 'a_send'),
-	'messages.edit': ('im', 'a_edit_message'),
-	'messages.delete': ('im', 'a_mark'),
-	'messages.setActivity': ('im', 'a_activity'),
+	'audio.get': ('al_audio', 'load_section'),
+	'audio.getById': ('al_audio', 'reload_audio'),
+	'audio.getFriends': ('al_audio', 'more_friends'),
+	'messages.send': ('al_im', 'a_send'),
+	'messages.edit': ('al_im', 'a_edit_message'),
+	'messages.delete': ('al_im', 'a_mark'),
+	'messages.setActivity': ('al_im', 'a_activity'),
+	'messages.getConversations': ('al_im', 'a_get_dialogs'),
+	'messages.getHistoryAttachments': ('wkview', 'show'),
 }
 al_params = {
 	'audio.get': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'type': 'playlist', 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', '')},
+	'audio.getById': lambda kwargs: {'ids': kwargs.get('audios')},
+	'audio.getFriends': lambda kwargs: kwargs,
 	'messages.send': lambda kwargs: {'to': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': kwargs.get('attachment', '')},
 	'messages.edit': lambda kwargs: {'peerId': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': kwargs.get('attachment', ''), 'id': kwargs.get('message_id', '')},
 	'messages.delete': lambda kwargs: {'peer': kwargs.get('peer_id', ''), 'msgs_ids': kwargs.get('message_ids', ''), 'mark': 'deleteforall' if (kwargs.get('delete_for_all', False)) else 'delete'},
 	'messages.setActivity': lambda kwargs: {'peer': kwargs.get('peer_id', ''), 'type': kwargs.get('type', '')},
+	'messages.getConversations': lambda kwargs: kwargs, # TODO?
+	'messages.getHistoryAttachments': lambda kwargs: {'w': f"history{kwargs.get('peer_id')}_{kwargs.get('media_type')}", 'offset': kwargs.get('start_from'), 'count': kwargs.get('count')},
 }
 al_return = {
-	'audio.get': lambda r: json.loads(r), # TODO FIXME
-	'messages.send': lambda r: json.loads(r)['msg_id'],
-	'messages.edit': lambda r: json.loads(r)['msg_id'],
-	'messages.delete': lambda r: int(r),
-	'messages.setActivity': lambda r: int(r),
+	'audio.get': al_parse_audio_list, # TODO api object
+	'audio.getById': lambda kwargs, r: json.loads(al_extract(r)[0]), # TODO api object
+	'audio.getFriends': lambda kwargs, r: json.loads(al_extract(r)[0]),
+	'messages.send': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
+	'messages.edit': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
+	'messages.delete': lambda kwargs, r: int(al_extract(r)[0]),
+	'messages.setActivity': lambda kwargs, r: int(al_extract(r)[0]),
+	'messages.getConversations': al_parse_dialogs,
+	'messages.getHistoryAttachments': al_parse_history_attachments,
 }
 def al(method, vk_sid_=None, nolog=False, **kwargs):
 	if (vk_sid_ is None): vk_sid_ = vk_sid
+	assert vk_sid_ # TODO: auto-login
 	if (method == 'messages.getLongPollServer'): return al_get_lp(vk_sid_)
 	al, act = al_actions.get(method, method.partition('.')[::2])
-	kwargs = al_params.get(method, lambda x: x)(kwargs)
-	if (method.partition('.')[0] == 'messages'): parseargs(kwargs, im_v=2, hash=al_im_hash)
-	parseargs(kwargs, al=1)
+	data = al_params.get(method, lambda x: x)(kwargs)
+	if (method.partition('.')[0] == 'messages'): parseargs(data, im_v=2, hash=al_im_hash)
+	parseargs(data, al=1)
 	if (not al or not act): return False
-	if (not nolog): log(2, f"Al Request: al={al}, act={act}, data={kwargs}")
+	if (not nolog): log(2, f"Al Request: al={al}, act={act}, data={data}")
 	e = None
-	try: r = al_return.get(method, lambda x: x)(regex.search(r'<!(?| json | int)>(?| (.*?)<!> | (.*))', requests.post(f"https://vk.com/al_{al}.php?act={act}", data=kwargs, cookies={'remixsid': vk_sid_}).text, regex.X)[1])
-	except Exception as ex: e = ex
-	if (e): raise \
-		VKAPIError({'error_code': 0, 'error_msg': repr(e)}, method)
+	r = None
+	try:
+		r = requests.post(f"https://vk.com/{al}.php?act={act}", data=data, cookies={'remixsid': vk_sid_}).text+'<!>'
+		r = al_return.get(method, lambda x: x)(kwargs, r)
+	except Exception as ex: raise VKAPIError({'error_code': 0}, method) from ex
 	if (not nolog): log(3, f"Al Response: {r}")
 	return r
 def al_login(login, password):
@@ -205,8 +373,11 @@ def derefuser(s):
 def proc_cmd(c): return (re.sub(rf'\[(?:club{group.id}|{group.screen_name})\|.*?\]', '', c).strip(' ') if (API.mode == 'group') else c).split()
 
 def groups(group_ids='', **kwargs):
-	parseargs(kwargs, group_ids=group_ids, fields='')
-	return API.groups.getById(**kwargs)
+	parseargs(kwargs, group_ids=S(',').join(group_ids) if (not isinstance(group_ids, (str, int))) else group_ids, fields='')
+	try: return API.groups.getById(**kwargs)
+	except VKAPIError as ex:
+		if (ex.args[0]['error_code'] == 100): return []
+		else: raise
 def ismember(group_id, user_ids, **kwargs): return API.groups.isMember(group_id=group_id, user_ids=user_ids, **kwargs)
 
 def chat(chat_id, **kwargs): parseargs(kwargs, chat_id=(chat_id % 100000000)); return API.messages.getChat(**kwargs)
@@ -364,7 +535,7 @@ class lp(threading.Thread):
 				try: a = requests.get(str().join(self.lp_url)).json()
 				except Exception: a = dict()
 				self.lp_url[1] = str(a.get('ts'))
-				if (a.get('failed')): self.lp_url = [str(), str()] #log(2, f"\033[91mLP Error:\033[0m {a}"); 
+				if (a.get('failed')): self.lp_url = [str(), str()]
 				for u in a.get('updates') or (): f_handle[self.lp_index](u)
 				for i in range(len(f_proc)):
 					if (time.time()-f_proc[i][2] >= f_proc[i][1]): f_proc[i][2] = time.time(); f_proc[i][0]()
