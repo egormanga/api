@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # VK API lib
 
-import requests
+import vaud, requests
 from .apiconf import app_id, al_im_hash, api_service_key
 from bs4 import BeautifulSoup as bs4
 from PIL import Image
@@ -128,13 +128,19 @@ def al_parse_audio(a):
 		'subtitle': a[al_audio_consts.AUDIO_ITEM_INDEX_SUBTITLE],
 		#'no_search'
 		'hashes': dict(zip(('addHash', 'editHash', 'actionHash', 'deleteHash', 'replaceHash', 'urlHash', 'restoreHash'), a[al_audio_consts.AUDIO_ITEM_INDEX_HASHES].split('/'))),
-		'raw_data': a,
 	}
 def al_parse_audio_id(a): return f"{a['owner_id']}_{a['id']}_{a['hashes']['actionHash']}_{a['hashes']['urlHash']}"
+def al_audio_get_hash(a): return hash(f"{a.get('owner_id')}_{a.get('id')}_{a.get('hashes')}")
+def al_audio_eq(a, b): return al_audio_get_hash(a) == al_audio_get_hash(b)
+def al_audio_get_url(user_id, a):
+	if (not a.get('url')): a['url'] = API.audio.getById(audios=al_parse_audio_id(a))[0]['url']
+	a['url'] = vaud.decode(user_id, a['url'])
+	return a['url']
 
 def al_parse_audio_list(kwargs, r):
 	r = json.loads(al_extract(r)[0])
 	r['list'] = list(map(al_parse_audio, r['list']))
+	#for i in range(0, len(r['list']), 9): r['list'][i:i+10] = map(al_parse_audio, API.audio.getById(audios=','.join(map(al_parse_audio_id, r['list'][i:i+10])))) # too slow
 	return S(r).translate({'has_more': ('hasMore', bool), 'next_from': 'nextOffset'})
 def al_parse_dialogs(kwargs, r):
 	r = tuple(map(json.loads, al_extract(r)))
@@ -195,10 +201,7 @@ def al_parse_dialogs(kwargs, r):
 def al_parse_history_attachments(kwargs, r):
 	count, offset = S(json.loads(al_extract(r)[1]))@['count', 'offset']
 	if (kwargs['media_type'] == 'audio'):
-		res = list()
-		l = [al_parse_audio_id(al_parse_audio(json.loads(html.unescape(i)))) for i in re.findall(r'data-audio="(\[.*\])"', r)]
-		for i in range(0, len(l), 9): res += API.audio.getById(audios=','.join(l[i:i+10]))
-		res = list(map(al_parse_audio, res))
+		res = [al_parse_audio(json.loads(html.unescape(i))) for i in re.findall(r'data-audio="(\[.*\])"', r)]
 	else: raise NotImplementedError(kwargs['media_type'])
 	return {
 		'count': count,
@@ -237,7 +240,7 @@ al_params = {
 }
 al_return = {
 	'audio.get': al_parse_audio_list, # TODO api object
-	'audio.getById': lambda kwargs, r: json.loads(al_extract(r)[0]), # TODO api object
+	'audio.getById': lambda kwargs, r: list(map(al_parse_audio, json.loads(al_extract(r)[0]))),
 	'audio.getFriends': lambda kwargs, r: json.loads(al_extract(r)[0]),
 	'messages.send': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
 	'messages.edit': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
