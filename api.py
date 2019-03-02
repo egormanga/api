@@ -85,7 +85,7 @@ def ret(url, data=None, wrap=False, method='ret', max_tries=5):
 def api(method, mode='user', wrap=True, max_tries=5, nolog=False, **kwargs): # TODO: move api() & ret() into API [maybe.]
 	parseargs(kwargs, v=api_version)
 	if (not method): return False
-	use_al = use_al_apis.get(method, use_al_apis.get(method.partition('.')[0]+'.*'))
+	use_al = al_get_method(method)
 	if (use_al is not None and (use_al or mode == 'user')): return al(method, nolog=nolog, **kwargs)
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
 	r = ret("https://api.vk.com/method/"+method, data=kwargs, wrap=wrap, method=method, max_tries=max_tries)
@@ -96,6 +96,7 @@ vk_sid = str()
 def setvksid(vk_sid_): global vk_sid; vk_sid = vk_sid_
 def getvksid(): return vk_sid
 
+def al_get_method(method): return use_al_apis.get(method, use_al_apis.get(method.partition('.')[0]+'.*'))
 def al_extract(r): return regex.findall(r'<!\w+>(.*?)<!>', r)
 def al_unhtml_text(text): return html.unescape(re.sub(r'<.*?alt="(.*?)">', r'\1', text)).replace('\xa0', ' ').replace('<br>', '\n')
 def al_parse_attachments(a):
@@ -261,10 +262,10 @@ def al(method, vk_sid_=None, nolog=False, **kwargs):
 	if (not nolog): log(2, f"Al Request: al={al}, act={act}, data={data}")
 	e = None
 	r = None
-	try:
-		r = requests.post(f"https://vk.com/{al}.php?act={act}", data=data, cookies={'remixsid': vk_sid_}).text+'<!>'
-		r = al_return.get(method, lambda x: x)(kwargs, r)
+	try: r = requests.post(f"https://vk.com/{al}.php?act={act}", data=data, cookies={'remixsid': vk_sid_}).text+'<!>'
 	except Exception as ex: raise VKAPIError({'error_code': 0}, method) from ex
+	try: r = al_return.get(method, lambda x: x)(kwargs, r)
+	except Exception: pass
 	if (not nolog): log(3, f"Al Response: {r}")
 	return r
 def al_login(login, password):
@@ -275,8 +276,9 @@ def al_login(login, password):
 def al_login_stdin(): return al_login(input('VK Login: '), getpass.getpass())
 def al_get_lp(vk_sid_=None):
 	if (vk_sid_ is None): vk_sid_ = vk_sid
-	r = json.loads(re.search(r'im\.init\(({.*?})\)', requests.get('https://vk.com/im', cookies={'remixsid': vk_sid_, 'remixmdevice': '0/0/0/!'}).text, re.S)[1])
-	return {'server': r['url'], 'key': r['key'], 'ts': r['ts']}
+	r = re.search(r'lpConfig:\ ?({.*?})', requests.get('https://vk.com/im', headers={'User-Agent': 'Linux'}, cookies={'remixsid': vk_sid_}, allow_redirects=False).text, re.S)[1]
+	def extract(x): return re.search(rf'''['"]?{x}['"]?:\ ?['"]?([\w.:/]+)['"]?''', r)[1]
+	return {'server': extract('url'), 'key': extract('key'), 'ts': extract('ts')}
 
 class _send:
 	def __init__(self):
@@ -528,16 +530,17 @@ class lp(threading.Thread):
 	def get_lp(cls, mode, wait=25, version=lp_version, **kwargs):
 		parseargs(kwargs, nolog=True)
 		lp = API.groups.getLongPollServer(group_id=group.id, **kwargs) if (mode == 'group') else API.messages.getLongPollServer(lp_version=lp_version, **kwargs)
-		return (cls.format_url(server=(lp['server'] if (mode == 'group') else 'https://'+lp['server']), key=lp['key'], wait=wait), str(lp['ts']))
+		if ('https://' not in lp['server']): lp['server'] = 'https://'+lp['server']
+		return (cls.format_url(server=lp['server'], key=lp['key'], wait=wait), str(lp['ts']))
 	def run(self):
 		log(f"LP #{self.lp_index} Started.")
 		while (True):
 			try:
 				if (not all(self.lp_url)): self.lp_url = list(self.get_lp(mode=self.mode, wait=self.lp_timeout, **self.kwargs))#; log(2, f"New LP Server: {str().join(self.lp_url)}")
-				#log(3, f"New LP Request: ts={self.lp_url[1]}")
+				#log(3, f"New LP Request: {self.lp_url}")
 				try: a = requests.get(str().join(self.lp_url)).json()
-				except Exception: a = dict()
-				self.lp_url[1] = str(a.get('ts'))
+				except Exception as ex: a = dict(); logexception(LPError(ex))
+				else: self.lp_url[1] = str(a.get('ts'))
 				if (a.get('failed')): self.lp_url = [str(), str()]
 				for u in a.get('updates') or (): f_handle[self.lp_index](u)
 				for i in range(len(f_proc)):
@@ -635,8 +638,11 @@ class _API: # scope=messages,groups,photos,status,docs,wall,offline
 	def __getattr__(self, method):
 		return self.__class__((self.method+'.'+method).strip('.'))
 	def __call__(self, *, access_token='access_token', **kwargs):
-		if (access_token not in tokens): access_token = 'service_key'; logexception(Warning(f"No {access_token} in tokens. Using service_key"), once=True, nolog=True)
-		try: return api(self.method, mode=self.mode, access_token=tokens[access_token], **kwargs)
+		if (al_get_method(self.method) is not None): access_token = ''
+		else:
+			if (access_token not in tokens and access_token != 'service_key'): logexception(Warning(f"No {access_token} in tokens. Using service_key"), once=True, nolog=True); access_token = 'service_key'
+			access_token = tokens[access_token]
+		try: return api(self.method, mode=self.mode, access_token=access_token, **kwargs)
 		except VKAPIError as ex:
 			if (ex.args[0]['error_code'] in (27, 28) or (ex.args[0]['error_code'] == 5 and '(4)' in ex.args[0]['error_msg']) and access_token != 'service_key'): tokens.discard(access_token)
 			elif (ex.args[0]['error_code'] == 15): tokens.increment_scope(access_token, self.method.split('.')[0], nolog=False)
@@ -654,6 +660,7 @@ class VKAPIError(Warning):
 		except Exception: pass
 		return res.strip(': ') or ' '.join(map(str, self.args)) or 'Unknown Error'
 class VKKeyboardError(Exception): pass
+class LPError(VKError): pass
 
 class _group:
 	def __init__(self):
@@ -675,7 +682,6 @@ if (__name__ == '__main__'):
 	logstarted()
 	setonsignals(exit)
 	handler(plog)
-	tokens.require('access_token', 'messages')
 	al_login_stdin()
 	exceptions = queue.Queue()
 	lp(eq=exceptions)
