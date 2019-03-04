@@ -82,11 +82,11 @@ def ret(url, data=None, wrap=False, method='ret', max_tries=5):
 		except Exception as ex:
 			if (not wrap or (type(ex) == VKAPIError and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
-def api(method, mode='user', wrap=True, max_tries=5, nolog=False, **kwargs): # TODO: move api() & ret() into API [maybe.]
+def api(method, mode=None, wrap=True, max_tries=5, nolog=False, **kwargs):
+	if (mode is None): mode = API.mode
 	parseargs(kwargs, v=api_version)
 	if (not method): return False
-	use_al = al_get_method(method)
-	if (use_al is not None and (use_al or mode == 'user')): return al(method, nolog=nolog, **kwargs)
+	if (al_use_method(method, mode)): return al(method, nolog=nolog, **kwargs)
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
 	r = ret("https://api.vk.com/method/"+method, data=kwargs, wrap=wrap, method=method, max_tries=max_tries)
 	if (not nolog): log(3, f"Response: {r}")
@@ -97,6 +97,7 @@ def setvksid(vk_sid_): global vk_sid; vk_sid = vk_sid_
 def getvksid(): return vk_sid
 
 def al_get_method(method): return use_al_apis.get(method, use_al_apis.get(method.partition('.')[0]+'.*'))
+def al_use_method(method, mode): use_al = al_get_method(method); return use_al is not None and (use_al or mode == 'user')
 def al_extract(r): return regex.findall(r'<!\w+>(.*?)<!>', r)
 def al_unhtml_text(text): return html.unescape(re.sub(r'<.*?alt="(.*?)">', r'\1', text)).replace('\xa0', ' ').replace('<br>', '\n')
 def al_parse_attachments(a):
@@ -578,7 +579,7 @@ class _Tokens:
 		notifications =	+524288,
 		stats =		+1048576,
 		email =		+4194304,
-		market =	+134217728
+		market =	+134217728,
 	)
 	def __init__(self, service_key=None):
 		self._tokens = dict()
@@ -642,9 +643,9 @@ class _API: # scope=messages,groups,photos,status,docs,wall,offline
 		if (method in self.blacklist or self.whitelist and method not in self.whitelist): raise \
 			PermissionError(f"Method {method} is not allowed")
 	def __getattr__(self, method):
-		return self.__class__((self.method+'.'+method).strip('.'))
+		return self.__class__(method=(self.method+'.'+method).strip('.'), mode=self.mode, blacklist=self.blacklist, whitelist=self.whitelist)
 	def __call__(self, *, access_token='access_token', **kwargs):
-		if (al_get_method(self.method) is not None): access_token = ''
+		if (al_use_method(self.method, self.mode)): access_token = ''
 		else:
 			if (access_token not in tokens and access_token != 'service_key'): logexception(Warning(f"No {access_token} in tokens. Using service_key"), once=True, nolog=True); access_token = 'service_key'
 			access_token = tokens[access_token]
