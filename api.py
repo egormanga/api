@@ -139,10 +139,13 @@ def al_audio_get_url(user_id, a):
 	return a['url']
 
 def al_parse_audio_list(kwargs, r):
-	r = json.loads(al_extract(r)[0])
 	r['list'] = list(map(al_parse_audio, r['list']))
 	#for i in range(0, len(r['list']), 9): r['list'][i:i+10] = map(al_parse_audio, API.audio.getById(audios=','.join(map(al_parse_audio_id, r['list'][i:i+10])))) # too slow
 	return S(r).translate({'has_more': ('hasMore', bool), 'next_from': 'nextOffset'})
+def al_parse_audio_search(kwargs, r):
+	r = json.loads(al_extract(r)[0])
+	r['playlists'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']))
+	return S(r).with_('has_more', False) # TODO
 def al_parse_dialogs(kwargs, r):
 	r = tuple(map(json.loads, al_extract(r)))
 	return {
@@ -221,6 +224,7 @@ al_actions = {
 	'audio.get': ('al_audio', 'load_section'),
 	'audio.getById': ('al_audio', 'reload_audio'),
 	'audio.getFriends': ('al_audio', 'more_friends'),
+	'audio.search': ('al_audio', 'section'),
 	'messages.send': ('al_im', 'a_send'),
 	'messages.edit': ('al_im', 'a_edit_message'),
 	'messages.delete': ('al_im', 'a_mark'),
@@ -232,6 +236,7 @@ al_params = {
 	'audio.get': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'type': 'playlist', 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', '')},
 	'audio.getById': lambda kwargs: {'ids': kwargs.get('audios')},
 	'audio.getFriends': lambda kwargs: kwargs,
+	'audio.search': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'section': 'search', 'q': kwargs.get('q', ''), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), **kwargs},
 	'messages.send': lambda kwargs: {'to': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': kwargs.get('attachment', '')},
 	'messages.edit': lambda kwargs: {'peerId': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': kwargs.get('attachment', ''), 'id': kwargs.get('message_id', '')},
 	'messages.delete': lambda kwargs: {'peer': kwargs.get('peer_id', ''), 'msgs_ids': kwargs.get('message_ids', ''), 'mark': 'deleteforall' if (kwargs.get('delete_for_all', False)) else 'delete'},
@@ -240,9 +245,10 @@ al_params = {
 	'messages.getHistoryAttachments': lambda kwargs: {'w': f"history{kwargs.get('peer_id')}_{kwargs.get('media_type')}", 'offset': kwargs.get('start_from'), 'count': kwargs.get('count')},
 }
 al_return = {
-	'audio.get': al_parse_audio_list, # TODO api object
+	'audio.get': lambda kwargs, r: al_parse_audio_list(kwargs, json.loads(al_extract(r)[0])), # TODO api object
 	'audio.getById': lambda kwargs, r: list(map(al_parse_audio, json.loads(al_extract(r)[0]))),
 	'audio.getFriends': lambda kwargs, r: json.loads(al_extract(r)[0]),
+	'audio.search': al_parse_audio_search, # TODO api object
 	'messages.send': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
 	'messages.edit': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
 	'messages.delete': lambda kwargs, r: int(al_extract(r)[0]),
@@ -250,6 +256,7 @@ al_return = {
 	'messages.getConversations': al_parse_dialogs,
 	'messages.getHistoryAttachments': al_parse_history_attachments,
 }
+
 def al(method, vk_sid_=None, nolog=False, **kwargs):
 	if (vk_sid_ is None): vk_sid_ = vk_sid
 	assert vk_sid_ # TODO: auto-login
@@ -264,8 +271,7 @@ def al(method, vk_sid_=None, nolog=False, **kwargs):
 	r = None
 	try: r = requests.post(f"https://vk.com/{al}.php?act={act}", data=data, cookies={'remixsid': vk_sid_}).text+'<!>'
 	except Exception as ex: raise VKAPIError({'error_code': 0}, method) from ex
-	try: r = al_return.get(method, lambda x: x)(kwargs, r)
-	except Exception: pass
+	r = al_return.get(method, lambda x: x)(kwargs, r)
 	if (not nolog): log(3, f"Al Response: {r}")
 	return r
 def al_login(login, password):
