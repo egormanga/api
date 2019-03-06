@@ -5,7 +5,7 @@ import vaud, requests
 from .apiconf import app_id, al_im_hash, api_service_key
 from bs4 import BeautifulSoup as bs4
 from PIL import Image
-from utils import *; logstart('API')
+from utils.nolog import *; logstart('API')
 
 """ Base main() function for a bot:
 def main():
