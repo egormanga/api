@@ -681,6 +681,7 @@ class _group:
 _lastex = [tuple(), int(), -1] # [ex.args, message_id, repeated]
 def _api_exc_handler(e, ex):
 	global _lastex
+	if (dbg_user_id is None): return
 	sendexstr = f"{sys.argv[0]}: {e}\n"+str().join(traceback.format_tb(ex.__traceback__)).replace('  ', '⠀') # '⠀' &#10240; U+2800 Braille pattern blank
 	if (ex.args != _lastex[0]): _lastex = [ex.args, int(), -1]
 	_lastex[2] += 1
@@ -689,6 +690,7 @@ def _api_exc_handler(e, ex):
 	except VKAPIError: msg_id = int()
 	if (not _lastex[1]): _lastex[1] = msg_id
 register_exc_handler(_api_exc_handler)
+def set_dbg_user_id(x): global dbg_user_id; dbg_user_id = x
 
 tokens = _Tokens(service_key=service_key)
 db.register('tokens', 'vk_sid')
