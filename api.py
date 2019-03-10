@@ -2,7 +2,7 @@
 # VK API lib
 
 import vaud, requests
-from .apiconf import app_id, al_im_hash, api_service_key
+from .apiconf import app_id, al_im_hash, dbg_user_id, api_service_key
 from bs4 import BeautifulSoup as bs4
 from PIL import Image
 from utils.nolog import *; logstart('API')
@@ -677,6 +677,18 @@ class _group:
 			try: self._group = groups()[0]
 			except Exception as ex: raise VKError(f"Unable to get current group though mode is set to 'group' (ex.args mixin)") from ex
 		return self._group[x]
+
+_lastex = [tuple(), int(), -1] # [ex.args, message_id, repeated]
+def _api_exc_handler(e, ex):
+	global _lastex
+	sendexstr = f"{sys.argv[0]}: {e}\n"+str().join(traceback.format_tb(ex.__traceback__)).replace('  ', '⠀') # '⠀' &#10240; U+2800 Braille pattern blank
+	if (ex.args != _lastex[0]): _lastex = [ex.args, int(), -1]
+	_lastex[2] += 1
+	if (_lastex[2]): sendexstr += f"(повторено ещё {decline(_lastex[2], ('раз', 'раза', 'раз'))})"
+	try: msg_id = send(dbg_user_id, sendexstr, message_id=_lastex[1], nolog='force')
+	except VKAPIError: msg_id = int()
+	if (not _lastex[1]): _lastex[1] = msg_id
+register_exc_handler(_api_exc_handler)
 
 tokens = _Tokens(service_key=service_key)
 db.register('tokens', 'vk_sid')
