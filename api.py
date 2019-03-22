@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 # VK API lib
 
-import vaud, requests
-from .apiconf import app_id, dbg_user_id, api_service_key
+import requests
+from .apiconf import app_id, dbg_user_id, api_service_key # custom global config file
 from bs4 import BeautifulSoup as bs4
 from PIL import Image
 from utils.nolog import *; logstart('API')
@@ -141,8 +141,45 @@ def al_audio_get_hash(a): return hash(f"{a.get('owner_id')}_{a.get('id')}_{a.get
 def al_audio_eq(a, b): return al_audio_get_hash(a) == al_audio_get_hash(b)
 def al_audio_get_url(user_id, a):
 	if (not a.get('url')): a['url'] = API.audio.getById(audios=al_parse_audio_id(a))[0]['url']
-	a['url'] = vaud.decode(user_id, a['url'])
+	a['url'] = al_audio_decode_url(user_id, a['url'])
 	return a['url']
+def al_audio_decode_url(user_id, url):
+	if ('audio_api_unavailable' not in url): return url
+
+	def splice(e, b, d):
+		e.insert(b+1, d)
+		return e.pop(b), e
+
+	def decode_str(s):
+		o = 0
+		t = int()
+		r = str()
+		for i in s:
+			n = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN0PQRSTUVWXYZO123456789+/='.find(i)
+			if (n == -1): continue
+			t = 64*t + n if (o % 4) else n
+			o += 1
+			if (not o-1 % 4): continue
+			c = 255 & t >> (-o*2 & 6)
+			if (c): r += chr(c)
+		return r
+
+	t, n = map(decode_str, url.partition('?extra=')[2].split('#'))
+	a, (e, t) = splice(n.partition(chr(9))[0].split(chr(11)), 0, t)
+	if (a == 'i'):
+		t = abs(int(t)^user_id)
+
+		r = dict()
+		for i in range(len(e), 0, -1):
+			r[i] = t = (len(e)*(i)^t+i-1) % len(e)
+		s = sorted(r.keys())
+
+		e = list(e)
+		for i in range(1, len(e)):
+			e, (e[i], *_) = splice(e, r[s[len(e)-1-i]], e[i])[::-1]
+		return str().join(e)
+	else: raise NotImplementedError(a)
+	# based on unmaintained https://github.com/yuru-yuri/vk-audio-url-decoder
 
 def al_parse_audio_list(kwargs, r):
 	r['list'] = list(map(al_parse_audio, r['list']))
@@ -259,7 +296,7 @@ al_params = {
 	'audio.getById': lambda kwargs: {'ids': kwargs.get('audios')},
 	'audio.getFriends': lambda kwargs: kwargs,
 	'messages.edit': lambda kwargs: {'peerId': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': kwargs.get('attachment', ''), 'id': kwargs.get('message_id', ''), 'hash': kwargs.get('hash', '')},
-	'messages.send': lambda kwargs: {'to': kwargs.get('peer_id', ''), 'msg': kwargs.get('message', ''), 'media': re.sub(r'(\w+?)(\d+_\d+)', r'\1:\2:undefined', kwargs.get('attachment', '')), 'hash': kwargs.get('hash', '')},
+	'messages.send': lambda kwargs: {'to': kwargs.get('peer_id'), 'msg': kwargs.get('message', ''), 'media': re.sub(r'(\w+?)(\d+_\d+)', r'\1:\2:undefined', kwargs.get('attachment', '')), 'hash': kwargs.get('hash', '')},
 	'messages.delete': lambda kwargs: {'peer': kwargs.get('peer_id', ''), 'msgs_ids': kwargs.get('message_ids', ''), 'mark': 'deleteforall' if (kwargs.get('delete_for_all', False)) else 'delete', 'hash': kwargs.get('hash', '')},
 	'messages.getHash': lambda kwargs: {'peers': kwargs.get('peer_ids', '')},
 	'messages.getHistory': lambda kwargs: {'peer': kwargs.get('peer_id', ''), 'offset': kwargs.get('offset', 0), 'toend': kwargs.get('toend', 0), 'whole': kwargs.get('whole', 0)},
@@ -285,7 +322,7 @@ al_return = {
 
 def al(method, vk_sid_=None, nolog=False, **kwargs):
 	if (vk_sid_ is None): vk_sid_ = vk_sid
-	assert vk_sid_ # TODO: auto-login
+	if (not vk_sid_): raise VKAlLoginError()
 	if (method == 'messages.getLongPollServer'): return al_get_lp(vk_sid_)
 	al, act = al_actions.get(method, method.partition('.')[::2])
 	data = al_params.get(method, lambda x: x)(kwargs)
@@ -311,14 +348,22 @@ def al_get_lp(vk_sid_=None):
 	r = re.search(r'lpConfig:\ ?({.*?})', requests.get('https://vk.com/im', headers={'User-Agent': 'Linux'}, cookies={'remixsid': vk_sid_}, allow_redirects=False).text, re.S)[1]
 	def extract(x): return re.search(rf'''['"]?{x}['"]?:\ ?['"]?([\w.:/]+)['"]?''', r)[1]
 	return {'server': extract('url'), 'key': extract('key'), 'ts': extract('ts')}
-def al_get_im_hash(peer_id): return API.messages.getHash(peer_ids=peer_id)[peer_id]
+def al_get_im_hash(peer_id): return API.messages.getHash(peer_ids=peer_id)[peer_id] if (API.mode == 'user') else ''
 
 class _send:
 	def __init__(self):
 		self.prefix = None
 	def __call__(self, peer_id, message, prefix=None, nolog=True, **kwargs):
-		parseargs(kwargs, peer_id=peer_id, message=message, hash=al_get_im_hash(peer_id))
-		#if (not message.strip()): return
+		if (isinstance(peer_id, (int, str))): peer_id = (peer_id,)
+		else: peer_id = tuple(peer_id)
+		if (not peer_id): return
+		if (len(peer_id) > 1):
+			peer_id = S(',').join(peer_id)
+			parseargs(kwargs, user_ids=peer_id)
+		else:
+			peer_id = peer_id[0]
+			parseargs(kwargs, peer_id=peer_id)
+		parseargs(kwargs, message=message, hash=al_get_im_hash(peer_id))
 		if (prefix is None): prefix = '👾' if (self.prefix is None and API.mode != 'group') else self.prefix or ''
 		if ('keyboard' in kwargs and not kwargs['keyboard']): kwargs.pop('keyboard')
 		if (not nolog): log(1, f"Sending message to {peer_id}:\n"+(kwargs['message']+str().join((f' <{i}>' for i in kwargs.get('attachment').split(',') or ()))).indent())
@@ -693,7 +738,8 @@ class VKAPIError(Warning):
 		except Exception: pass
 		return res.strip(': ') or ' '.join(map(str, self.args)) or 'Unknown Error'
 class VKKeyboardError(Exception): pass
-class LPError(VKError): pass
+class LPError(VKError, NonLoggingException): pass
+class VKAlLoginError(VKError): pass
 
 class _group:
 	def __init__(self):
