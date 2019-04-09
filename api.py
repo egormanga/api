@@ -3,7 +3,6 @@
 
 import requests
 from .apiconf import app_id, dbg_user_id, api_service_key # custom global config file
-from bs4 import BeautifulSoup as bs4
 from PIL import Image
 from utils.nolog import *; logstart('API')
 
@@ -340,7 +339,7 @@ def al(method, vk_sid_=None, nolog=False, **kwargs):
 def al_login(login, password):
 	global vk_sid
 	s = requests.session()
-	s.post(bs4(s.get('https://m.vk.com/login').text, 'html.parser').form['action'], data={'email': login, 'pass': password})
+	s.post(bs4.BeautifulSoup(s.get('https://m.vk.com/login').text, 'html.parser').form['action'], data={'email': login, 'pass': password})
 	vk_sid = s.cookies['remixsid']
 def al_login_stdin(): return al_login(input('VK Login: '), getpass.getpass())
 def al_get_lp(vk_sid_=None):
@@ -370,7 +369,7 @@ class _send:
 		kwargs.update({'message': prefix+' '+str(message), 'nolog': bool(nolog) and nolog != True})
 		return (API.messages.send if (not kwargs.get('message_id')) else API.messages.edit)(**kwargs)
 
-def openimg(img):
+def openimg(img): # TODO: from cimg
 	try: return img if (Image.isImageType(img)) else Image.open(img)
 	except: pass
 	try: return Image.open(requests.get(img, stream=True).raw)
@@ -541,7 +540,7 @@ def command_unknown(f):
 	commands[(-1,)] = f
 	return f
 f_proc = list()
-def proc(n):
+def proc(n): # TODO: rewrite with dispatch()
 	global f_proc, n_proc
 	if (isnumber(n)):
 		def decorator(f):
@@ -770,6 +769,10 @@ API = _API()
 send = _send()
 group = _group()
 if (sys.flags.interactive): tokens.require('access_token')
+
+# TODO: argparse-like commands parsing
+# TODO: check scope before using al
+# Okay, api is now like Xorg — overcomplicated and too complex: more like framework, not library. Maybe, de-complicate it?
 
 if (__name__ == '__main__'):
 	logstarted()
