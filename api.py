@@ -23,8 +23,11 @@ def main():
 		except KeyboardInterrupt as ex: exit(ex)
 (not a bare minimum though) """
 
-api_version = '5.89'
+api_version = '5.101'
 lp_version = '3'
+use_al_run_methods = ('messages', 'execute')
+use_al_php_methods = ('audio',)
+use_force_al_run = False
 
 class al_audio_consts:
 	AUDIO_ITEM_INDEX_ID = 0
@@ -60,15 +63,15 @@ class al_audio_consts:
 	AUDIO_ITEM_EXPLICIT_BIT = 1024
 
 
-def ret(url, *, data=None, wrap=False, method='ret', max_tries=5):
+def ret(method, data={}, *, wrap=False, max_tries=5, use_al=False, nolog=False):
 	for i in range(max_tries if (wrap) else 1):
 		time.sleep(i)
 		try:
-			res = requests.post(url, data=data).json()
+			res = (al if (not use_force_al_run and method.partition('.')[0] in use_al_php_methods) else al_run_method)(method, nolog=nolog, **data) if (use_al) else requests.post(f"https://api.vk.com/method/{method}", data=data).json()
 			if ('error' in res): raise \
 				VKAPIError(res['error'], method)
-			return res['response']
-		except Exception as ex:
+			return res.get('response', res) if isinstance(res, dict) else res
+		except (OSError, VKAPIError) as ex:
 			if (not wrap or (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
 def api(method, *, access_token, wrap=True, max_tries=5, nolog=False, **kwargs):
@@ -76,9 +79,10 @@ def api(method, *, access_token, wrap=True, max_tries=5, nolog=False, **kwargs):
 	if (not method): return False
 	parseargs(kwargs, access_token=tokens[access_token] if (access_token in tokens) else access_token)
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
-	try: r = ret("https://api.vk.com/method/"+method, data=kwargs, wrap=wrap, method=method, max_tries=max_tries)
+	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=use_force_al_run or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods), nolog=nolog)
 	except VKAPIError as ex:
-		if (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] in (3, 7, 15, 20, 21, 23, 28)): return al(method, nolog=nolog, **kwargs)
+		if (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] in (3, 7, 15, 20, 21, 23, 28)):
+			r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=True, nolog=nolog)
 		else: raise
 	if (not nolog): log(3, f"Response: {r}")
 	return r
@@ -170,7 +174,7 @@ def al_audio_decode_url(user_id, url):
 	# based on unmaintained https://github.com/yuru-yuri/vk-audio-url-decoder
 
 def al_parse_audio_albums(kwargs, r):
-	r = [{'owner_id': int(i[0]), 'id': int(i[1]), 'title': i[3] if (len(i) > 3) else i[2], 'access_hash': i[2] if (len(i) > 3) else ''} for i in re.findall(r"showAudioPlaylist\((-?\d+),\ ?(\d+),\ ?'([\w\d]*)'.*?>(.+?)</a>", al_unhtml_text(r))]
+	r = [{'owner_id': int(i[0]), 'id': int(i[1]), 'title': i[3] if (len(i) > 3) else i[2], 'access_hash': i[2] if (len(i) > 3) else ''} for i in re.findall(r"showAudioPlaylist\((-?\d+),\ ?(\d+),\ ?'([\w\d]*)'.*?>(.+?)</a>", al_unhtml_text(r[0]))]
 	return {
 		'count': len(r),
 		'items': r,
@@ -180,7 +184,6 @@ def al_parse_audio_list(kwargs, r):
 	#for i in range(0, len(r['list']), 9): r['list'][i:i+10] = map(al_parse_audio, API.audio.getById(audios=','.join(map(al_parse_audio_id, r['list'][i:i+10])))) # too slow
 	return S(r).translate({'has_more': ('hasMore', bool), 'next_from': 'nextOffset'})
 def al_parse_audio_search(kwargs, r):
-	r = json.loads(al_extract(r)[0])
 	r['playlists'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']))
 	return S(r).with_('has_more', False) # TODO
 def al_parse_message(m, parse_attachments=False):
@@ -288,7 +291,7 @@ al_actions = {
 	'messages.getHistoryAttachments': ('wkview', 'show'),
 }
 al_params = {
-	'audio.get': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'type': 'playlist', 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), 'access_hash': kwargs.get('access_hash', '')},
+	'audio.get': lambda kwargs: {'owner_id': kwargs['owner_id'] if (kwargs.get('owner_id')) else user()[0]['id'], 'type': 'playlist', 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), 'access_hash': kwargs.get('access_hash', '')},
 	'audio.search': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'section': 'search', 'q': kwargs.get('q', ''), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), **kwargs},
 	'audio.getById': lambda kwargs: {'ids': kwargs.get('audios', '')}, # audios: «{owner_id}_{track_id}_{actionHash}_{urlHash}»
 	'audio.getAlbums': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'section': 'playlists', 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', '')},
@@ -305,12 +308,11 @@ al_params = {
 	'messages.getHistoryAttachments': lambda kwargs: {'w': f"history{kwargs.get('peer_id')}_{kwargs.get('media_type')}", 'offset': kwargs.get('start_from'), 'count': kwargs.get('count')},
 }
 al_return = {
-	'audio.get': lambda kwargs, r: al_parse_audio_list(kwargs, json.loads(al_extract(r)[0])), # TODO api object
-	'audio.search': al_parse_audio_search, # TODO api object
-	'audio.getById': lambda kwargs, r: list(map(al_parse_audio, json.loads(al_extract(r)[0]))),
+	'audio.get': lambda kwargs, r: al_parse_audio_list(kwargs, r[0]), # TODO api object
+	'audio.search': lambda kwargs, r: al_parse_audio_search(kwargs, r[1]), # TODO api object
+	'audio.getById': lambda kwargs, r: list(map(al_parse_audio, r)),
 	'audio.getAlbums': al_parse_audio_albums,
-	'audio.getLyrics': lambda kwargs, r: {'lyrics_id': kwargs.get('lyrics_id'), 'text': al_unhtml_text(regex.findall(r'<!\w*?>(.*?)<!>', r)[2:][0])},
-	'audio.getFriends': lambda kwargs, r: json.loads(al_extract(r)[0]),
+	'audio.getLyrics': lambda kwargs, r: {'lyrics_id': kwargs.get('lyrics_id'), 'text': al_unhtml_text(r[0]).strip('"')},
 	'messages.edit': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
 	'messages.send': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
 	'messages.delete': lambda kwargs, r: int(al_extract(r)[0]),
@@ -326,15 +328,29 @@ def al(method, vk_sid_=None, nolog=False, **kwargs):
 	if (not vk_sid_): raise VKAlLoginError()
 	if (method == 'messages.getLongPollServer'): return al_get_lp(vk_sid_)
 	al, act = al_actions.get(method, method.partition('.')[::2])
-	data = al_params.get(method, lambda x: x)(kwargs)
+	data = al_params.get(method, lambda kwargs: kwargs)(kwargs)
 	parseargs(data, al=1)
 	if (not al or not act): return False
 	if (not nolog): log(2, f"Al Request: al={al}, act={act}, data={data}")
 	try: r = requests.post(f"https://vk.com/{al}.php?act={act}", data=data, cookies={'remixsid': vk_sid_}); assert r.ok
 	except Exception as ex: raise VKAPIError({'error_code': 0}, method) from ex
-	if (al_retcode(r.text) == 3): raise VKAlLoginError()
-	r = al_return.get(method, lambda kwargs, x: x)(kwargs, r.text+'<!>')
+	r = json.loads(r.text.strip('<!-'))['payload']
+	#if (r[0] == 3): raise VKAlLoginError() # TODO FIXME?
+	r = al_return.get(method, lambda kwargs, x: x)(kwargs, r[1])
 	if (not nolog): log(3, f"Al Response: {r}")
+	return r
+def al_run_method(method, vk_sid_=None, nolog=False, **kwargs):
+	if (vk_sid_ is None): vk_sid_ = vk_sid
+	if (not vk_sid_): raise VKAlLoginError()
+	data = {'param_'+k: v for k, v in kwargs.items() if k != 'method'}
+	parseargs(data, al=1, method=method, hash=al_get_run_hash(method))
+	if (not nolog): log(2, f"Al Dev Request: method={method}, data={data}")
+	try: r = requests.post(f"https://vk.com/dev.php?act=a_run_method", data=data, cookies={'remixsid': vk_sid_}); assert r.ok
+	except Exception as ex: raise VKAPIError({'error_code': 0}, method) from ex
+	r = json.loads(r.text.strip('<!-'))['payload']
+	#if (r[0] == 3): raise VKAlLoginError() # TODO FIXME?
+	r = json.loads(r[1][0])
+	if (not nolog): log(3, f"Al Dev Response: {r}")
 	return r
 def al_login(login, password):
 	global vk_sid
@@ -350,10 +366,16 @@ def al_get_lp(vk_sid_=None):
 	def extract(x): return re.search(rf'''['"]?{x}['"]?:\ ?['"]?([\w.:/]+)['"]?''', r[1])[1]
 	return {'server': extract('url'), 'key': extract('key'), 'ts': extract('ts')}
 def al_get_im_hash(peer_id, nolog=True): return API.messages.getHash(peer_ids=peer_id, nolog=nolog)[peer_id] if (API.mode == 'user') else ''
+@cachedfunction
+def al_get_run_hash(method):
+	r = re.search(r"Dev\.\w+?\('(\d+:[\w\d]+)'.*?\)", requests.get(f"https://vk.com/dev/{method}", cookies={'remixsid': vk_sid}, allow_redirects=False).text)
+	if (r is None): raise VKAlLoginError()
+	return r.group(1)
 
 class _send:
 	def __init__(self):
 		self.prefix = None
+
 	def __call__(self, peer_id, message, prefix=None, nolog=True, **kwargs):
 		if (isinstance(peer_id, (int, str))): peer_id = (peer_id,)
 		else: peer_id = tuple(peer_id)
@@ -364,7 +386,8 @@ class _send:
 		else:
 			peer_id = peer_id[0]
 			parseargs(kwargs, peer_id=peer_id)
-		parseargs(kwargs, message=message, hash=al_get_im_hash(peer_id))
+		parseargs(kwargs, message=message, random_id=random.randrange(-2**63, 2**63))
+		if (not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
 		if (prefix is None): prefix = '👾' if (self.prefix is None and API.mode != 'group') else self.prefix or ''
 		if ('keyboard' in kwargs and not kwargs['keyboard']): kwargs.pop('keyboard')
 		if (not nolog): log(1, f"Sending message to {peer_id}:\n"+(kwargs['message']+str().join((f' <{i}>' for i in kwargs.get('attachment').split(',') or ()))).indent())
@@ -388,12 +411,13 @@ def saveimg(img):
 def attach(peer_id, file, type='doc', **kwargs):
 	file = saveimg(file)
 	if (type == 'photo'): return "photo{owner_id}_{id}".format_map(API.photos.saveMessagesPhoto(**requests.post(API.photos.getMessagesUploadServer(peer_id=peer_id, **kwargs)['upload_url'], files={'photo': file}).json())[0])
-	return "doc{owner_id}_{id}".format_map(API.docs.save(**requests.post(API.docs.getMessagesUploadServer(peer_id=peer_id, type=type, **kwargs)['upload_url'], files={'file': file}).json())[0])
+	doc = API.docs.save(**requests.post(API.docs.getMessagesUploadServer(peer_id=peer_id, type=type, **kwargs)['upload_url'], files={'file': file}).json())
+	return 'doc{owner_id}_{id}'.format_map(doc[doc['type']])
 def setactivity(peer_id, type, **kwargs): parseargs(kwargs, peer_id=peer_id, type=type); return API.messages.setActivity(**kwargs)
 def settyping(peer_id, type='typing', **kwargs): logexception(DeprecationWarning("*** settyping() → setactivity(type='typing') ***")); parseargs(kwargs, peer_id=peer_id, type=type); return setactivity(**kwargs)
 
 commands = dict()
-def sendhelp(peer_id, commands=commands, n=4, head='', title='Доступные команды:', tail='', keyboard=True, display=2, **kwargs): return send(peer_id, f"{head}\n\n{title}\n%s\n\n{tail}" % '\n'.join('%s — %s' % (i[0]+(' (%s)' % ', '.join(i[1:display])) if (display > 1) else '', i[-2]) for i in commands if i[-1] > -1), keyboard=mkkeyboard(commands if (keyboard) else {}, n, one_time=keyboard) if (API.mode == 'group') else '', **kwargs) # •
+def sendhelp(peer_id, commands=commands, n=4, head='', title='Доступные команды:', tail='', keyboard=True, one_time=True, display=2, **kwargs): return send(peer_id, f"{head}\n\n{title}\n%s\n\n{tail}" % '\n'.join('%s — %s' % (i[0]+(' (%s)' % ', '.join(i[1:display])) if (display > 1) else '', i[-2]) for i in commands if i[-1] > -1), keyboard=mkkeyboard(commands if (keyboard) else {}, n, one_time=one_time) if (API.mode == 'group') else '', **kwargs) # •
 def mkkeyboard(commands, n=4, one_time=True):
 	keyboard = {
 		'one_time': one_time,
@@ -416,8 +440,14 @@ def messages(peer_id, **kwargs): parseargs(kwargs, peer_id=peer_id); return API.
 def dialogs(**kwargs): return API.messages.getConversations(**kwargs)
 def getcounters(**kwargs): return API.account.getCounters(**kwargs)
 
-def read(peer_id, start_message_id=int(), **kwargs): parseargs(kwargs, peer_id=peer_id, start_message_id=start_message_id or messages(peer_id, nolog=True)['items'][0]['id'], hash=al_get_im_hash(peer_id)); return API.messages.markAsRead(**kwargs)
-def delete(peer_id, message_ids, **kwargs): parseargs(kwargs, message_ids=message_ids, hash=al_get_im_hash(peer_id)); return API.messages.delete(**kwargs)
+def read(peer_id, start_message_id=int(), **kwargs):
+	parseargs(kwargs, peer_id=peer_id, start_message_id=start_message_id or messages(peer_id, nolog=True)['items'][0]['id'])
+	if (not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
+	return API.messages.markAsRead(**kwargs)
+def delete(peer_id, message_ids, **kwargs):
+	parseargs(kwargs, message_ids=message_ids)
+	if (not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
+	return API.messages.delete(**kwargs)
 
 def parsecommas(x):
 	if (not x): return None
@@ -425,11 +455,13 @@ def parsecommas(x):
 	if (not isiterable(x)): return str(x).strip() or None
 	return Stuple(map(parsecommas, x or ())).flatten().strip() or None
 
-def user(*items, groups=False, **kwargs):
-	items = list(parsecommas(items) or ())
-	if ('items' in kwargs): items += parsecommas(kwargs.pop('items')) or ()
+def user(*items, groups=False, neg_group_ids=False, **kwargs):
+	items_ = list(parsecommas(items) or ())
+	if ('items' in kwargs): items_ += parsecommas(kwargs.pop('items')) or ()
+	elif (items and not items_): return ()
+	items = items_
 	res = list()
-	if (not groups and items): res += API.users.get(user_ids=','.join(map(str, items)), **kwargs)
+	if (not groups and items and '-' not in S('').join(items)): res += API.users.get(user_ids=S(',').join(items), **kwargs)
 	elif (items):
 		items_u = Slist(items)
 		items_g = Slist(items)
@@ -439,7 +471,7 @@ def user(*items, groups=False, **kwargs):
 			try: res += API.users.get(user_ids=','.join(map(str, items_u)), **kwargs) or []
 			except VKAPIError: pass
 		if (items_g):
-			try: res += [S(i).with_('id', abs(i['id'])) for i in API.groups.getById(group_ids=','.join(str(i).lstrip('-') for i in items_g), **kwargs) or []]
+			try: res += [S(i).with_('id', i['id']*pm(not neg_group_ids)) for i in API.groups.getById(group_ids=','.join(str(i).lstrip('-') for i in items_g), **kwargs)]
 			except VKAPIError: pass
 	else: res += API.users.get(**kwargs)
 	for i in res:
@@ -449,10 +481,12 @@ def user(*items, groups=False, **kwargs):
 		if ('domain' not in i): i['domain'] = i.get('screen_name', f"id{i['id']}")
 		i['name_case'] = kwargs.get('name_case', 'nom')
 	return res
+@cachedfunction
 def refuser(u, nopush=False, domain=False, fullname=False, **kwargs):
 	if (not isinstance(u, dict) or not u.get('name') or kwargs.get('name_case') and u.get('name_case', kwargs.get('name_case')) != kwargs.get('name_case')): u = user(u['id'] if (isinstance(u, dict)) else u, groups=True, wrap=False, nolog=False, **kwargs)[0]
 	name = u.get('name') if (fullname) else u.get('first_name') or u['name']
 	return f"[{u['domain']}|{name}]" if (not domain and not nopush) else f"@{u['domain']} ({u['name']})" if (fullname and not nopush) else f"@{u['domain']}" if (not nopush) else name
+@cachedfunction
 def derefuser(s):
 	try: r = regex.match(r'(?| \[(.*?)\|(.*?)\] | @(\w+)\ ?(?:\((\w+)\))? | (?:https?://)?(?:vk.com/)?(\w+) )(.*)', s, regex.X).groups()
 	except AttributeError: r = (None, None, None)
@@ -500,6 +534,7 @@ def setcover(photo, **kwargs): parseargs(kwargs, group_id=group.id, crop_x2=1590
 def execute(code, **kwargs): parseargs(kwargs, code=code); return API.execute(**kwargs)
 
 def copy_message(m, peer_id, stickers_size=-1, **kwargs):
+	if (m.get('reply_message')): m['text'] += "\n\n[Ответ]\n"+S(refuser(m['reply_message']['from_id'], nopush=True, fullname=True)+': '+format_message(m['reply_message'])).indent(1, char='⠀| ')
 	if (m.get('fwd_messages')): m['text'] += "\n\n[Пересланные сообщения]\n"+'\n'.join(S(refuser(i['from_id'], nopush=True, fullname=True)+': '+format_message(i)).indent(1, char='⠀| ') for i in m['fwd_messages'])
 	return send(peer_id, m['text'], attachment=copy_attachments(m, peer_id, stickers_size=stickers_size), **kwargs)
 def copy_post(post, **kwargs): # TODO: use copy_attachments
@@ -514,16 +549,16 @@ def copy_attachments(m, peer_id, stickers_size=-1):
 	return ','.join(a)
 def format_message(m):
 	types = {
-		'photo':	('фотография', 'фотографии', 'фотографий'),
-		'video':	('видеозапись', 'видеозаписи', 'видеозаписей'),
-		'audio':	('аудиозапись', 'аудиозаписи', 'аудиозаписей'),
-		'doc':		('документ', 'документа', 'документов'),
+		'photo':		('фотография', 'фотографии', 'фотографий'),
+		'video':		('видеозапись', 'видеозаписи', 'видеозаписей'),
+		'audio':		('аудиозапись', 'аудиозаписи', 'аудиозаписей'),
+		'doc':			('документ', 'документа', 'документов'),
 		'link':		('ссылка', 'ссылки', 'ссылок'),
-		'market':	('товар', 'товара', 'товаров'),
+		'market':		('товар', 'товара', 'товаров'),
 		'market_album':	('подборка товаров', 'подборки товаров', 'подборок товаров'),
 		'wall':		('запись на стене', 'записи на стене', 'записей на стене'),
-		'wall_reply':	('комментарий на стене', 'комментария на стене', 'комментариев на стене'),
-		'sticker':	('стикер', 'стикера', 'стикеров'),
+		'wall_reply':		('комментарий на стене', 'комментария на стене', 'комментариев на стене'),
+		'sticker':		('стикер', 'стикера', 'стикеров'),
 		'gift':		('подарок', 'подарка', 'подарков'),
 		'call':		('звонок', 'звонка', 'звонков'),
 	}
@@ -640,25 +675,25 @@ class lp(threading.Thread):
 
 class _Tokens:
 	_scope_mask = dict(
-		notify =	+1,
-		friends =	+2,
-		photos =	+4,
+		notify =		+1,
+		friends =		+2,
+		photos =		+4,
 		audio =		+8,
 		video =		+16,
-		stories =	+64,
+		stories =		+64,
 		pages =		+128,
-		status =	+1024,
+		status =		+1024,
 		notes =		+2048,
-		messages =	+4096,
-		wall =		+8192,
-		ads =		+32768,
-		offline =	+65536,
-		docs =		+131072,
-		groups =	+262144,
+		messages =		+4096,
+		wall =			+8192,
+		ads =			+32768,
+		offline =		+65536,
+		docs =			+131072,
+		groups =		+262144,
 		notifications =	+524288,
 		stats =		+1048576,
 		email =		+4194304,
-		market =	+134217728,
+		market =		+134217728,
 	)
 
 	def __init__(self, service_key=None):
@@ -823,7 +858,6 @@ if (sys.flags.interactive): tokens.require('access_token')
 
 # TODO: argparse-like commands parsing
 # TODO: check scope before using al
-# Okay, api is now like Xorg — overcomplicated and too complex: more like framework, not library. Maybe, de-complicate it?
 
 if (__name__ == '__main__'):
 	logstarted()
