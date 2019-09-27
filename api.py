@@ -310,7 +310,7 @@ al_params = {
 al_return = {
 	'audio.get': lambda kwargs, r: al_parse_audio_list(kwargs, r[0]), # TODO api object
 	'audio.search': lambda kwargs, r: al_parse_audio_search(kwargs, r[1]), # TODO api object
-	'audio.getById': lambda kwargs, r: list(map(al_parse_audio, r)),
+	'audio.getById': lambda kwargs, r: list(map(al_parse_audio, r[0])),
 	'audio.getAlbums': al_parse_audio_albums,
 	'audio.getLyrics': lambda kwargs, r: {'lyrics_id': kwargs.get('lyrics_id'), 'text': al_unhtml_text(r[0]).strip('"')},
 	'messages.edit': lambda kwargs, r: json.loads(al_extract(r)[0])['msg_id'],
