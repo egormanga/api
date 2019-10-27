@@ -74,12 +74,13 @@ def ret(method, data={}, *, wrap=False, max_tries=5, use_al=False, nolog=False):
 		except (OSError, VKAPIError) as ex:
 			if (not wrap or (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
-def api(method, *, access_token, wrap=True, max_tries=5, nolog=False, **kwargs):
+def api(method, *, access_token='access_token', wrap=True, max_tries=5, nolog=False, **kwargs):
 	parseargs(kwargs, lang=locale.getlocale()[0].split('_')[0], v=api_version)
 	if (not method): return False
+	is_user = access_token != 'access_token' or API.mode == 'user'
 	parseargs(kwargs, access_token=tokens[access_token] if (access_token in tokens) else access_token)
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
-	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=use_force_al_run or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods), nolog=nolog)
+	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user and (use_force_al_run or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods)), nolog=nolog)
 	except VKAPIError as ex:
 		if (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] in (3, 7, 15, 20, 21, 23, 28)):
 			r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=True, nolog=nolog)
@@ -326,7 +327,7 @@ al_return = {
 def al(method, vk_sid_=None, nolog=False, **kwargs):
 	if (vk_sid_ is None): vk_sid_ = vk_sid
 	if (not vk_sid_): raise VKAlLoginError()
-	if (method == 'messages.getLongPollServer'): return al_get_lp(vk_sid_)
+	#if (method == 'messages.getLongPollServer'): return al_get_lp(vk_sid_) # TODO FIXME
 	al, act = al_actions.get(method, method.partition('.')[::2])
 	data = al_params.get(method, lambda kwargs: kwargs)(kwargs)
 	parseargs(data, al=1)
@@ -347,7 +348,7 @@ def al_run_method(method, vk_sid_=None, nolog=False, **kwargs):
 	if (not nolog): log(2, f"Al Dev Request: method={method}, data={data}")
 	try: r = requests.post(f"https://vk.com/dev.php?act=a_run_method", data=data, cookies={'remixsid': vk_sid_}); assert r.ok
 	except Exception as ex: raise VKAPIError({'error_code': 0}, method) from ex
-	r = json.loads(r.text.strip('<!-'))['payload']
+	r = json.loads(al_unhtml_text(r.text.strip('<!-')))['payload']
 	#if (r[0] == 3): raise VKAlLoginError() # TODO FIXME?
 	r = json.loads(r[1][0])
 	if (not nolog): log(3, f"Al Dev Response: {r}")
@@ -387,7 +388,7 @@ class _send:
 			peer_id = peer_id[0]
 			parseargs(kwargs, peer_id=peer_id)
 		parseargs(kwargs, message=message, random_id=random.randrange(-2**63, 2**63))
-		if (not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
+		if (API.mode == 'user' and not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
 		if (prefix is None): prefix = '👾' if (self.prefix is None and API.mode != 'group') else self.prefix or ''
 		if ('keyboard' in kwargs and not kwargs['keyboard']): kwargs.pop('keyboard')
 		if (not nolog): log(1, f"Sending message to {peer_id}:\n"+(kwargs['message']+str().join((f' <{i}>' for i in kwargs.get('attachment').split(',') or ()))).indent())
@@ -442,11 +443,11 @@ def getcounters(**kwargs): return API.account.getCounters(**kwargs)
 
 def read(peer_id, start_message_id=int(), **kwargs):
 	parseargs(kwargs, peer_id=peer_id, start_message_id=start_message_id or messages(peer_id, nolog=True)['items'][0]['id'])
-	if (not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
+	if (API.mode == 'user' and not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
 	return API.messages.markAsRead(**kwargs)
 def delete(peer_id, message_ids, **kwargs):
 	parseargs(kwargs, message_ids=message_ids)
-	if (not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
+	if (API.mode == 'user' and not use_force_al_run and 'messages' in use_al_php_methods): parseargs(kwargs, hash=al_get_im_hash(peer_id))
 	return API.messages.delete(**kwargs)
 
 def parsecommas(x):
@@ -661,7 +662,7 @@ class lp(threading.Thread):
 				try: a = requests.get(str().join(self.lp_url)).json()
 				except Exception as ex: a = dict(); logexception(LPError(ex))
 				else: self.lp_url[1] = str(a.get('ts'))
-				if (a.get('failed')): self.lp_url = [str(), str()]
+				if (a.get('failed')): self.lp_url[0] = ''
 				for u in a.get('updates') or (): f_handle[self.lp_index](u)
 				for i in range(len(f_proc)):
 					if (time.time()-f_proc[i][2] >= f_proc[i][1]): f_proc[i][2] = time.time(); f_proc[i][0]()
@@ -675,25 +676,25 @@ class lp(threading.Thread):
 
 class _Tokens:
 	_scope_mask = dict(
-		notify =		+1,
-		friends =		+2,
-		photos =		+4,
-		audio =		+8,
-		video =		+16,
-		stories =		+64,
-		pages =		+128,
-		status =		+1024,
-		notes =		+2048,
-		messages =		+4096,
-		wall =			+8192,
-		ads =			+32768,
-		offline =		+65536,
-		docs =			+131072,
-		groups =		+262144,
-		notifications =	+524288,
-		stats =		+1048576,
-		email =		+4194304,
-		market =		+134217728,
+		notify		= +1,
+		friends		= +2,
+		photos		= +4,
+		audio		= +8,
+		video		= +16,
+		stories		= +64,
+		pages		= +128,
+		status		= +1024,
+		notes		= +2048,
+		messages	= +4096,
+		wall		= +8192,
+		ads		= +32768,
+		offline		= +65536,
+		docs		= +131072,
+		groups		= +262144,
+		notifications	= +524288,
+		stats		= +1048576,
+		email		= +4194304,
+		market		= +134217728,
 	)
 
 	def __init__(self, service_key=None):
@@ -800,7 +801,7 @@ class _API: # scope=messages,groups,photos,status,docs,wall,offline
 
 	def __call__(self, *, access_token='access_token', **kwargs):
 		if (access_token not in tokens and access_token != 'service_key'):
-			logexception(Warning(f"No {access_token} in tokens. Using service_key"), once=True, nolog=True)
+			#logexception(Warning(f"No {access_token} in tokens. Using service_key"), once=True, nolog=True) # TODO FIXME scripts
 			access_token = 'service_key'
 		try: return api(self.method, access_token=access_token, **kwargs)
 		except VKAPIError as ex:
@@ -813,6 +814,21 @@ class _API: # scope=messages,groups,photos,status,docs,wall,offline
 
 	def __repr__(self):
 		return self.method or 'API'
+
+def api_iter(method, to_=noop, **kwargs):
+	parseargs(kwargs, access_token=access_token)
+	offset = kwargs.pop('offset') if ('offset' in kwargs) else int()
+	while (True):
+		r = api(method, **kwargs, offset=offset)
+		if (not r['items']): break
+		offset += len(r['items'])
+		for i in r['items']:
+			if (to_(i)): break
+			yield i
+		else: continue
+		break
+	else: return 0
+	return r['count']
 
 class VKError(Exception): pass
 class VKAPIError(Warning):
