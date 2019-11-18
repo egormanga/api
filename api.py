@@ -419,9 +419,10 @@ def settyping(peer_id, type='typing', **kwargs): logexception(DeprecationWarning
 
 commands = dict()
 def sendhelp(peer_id, commands=commands, n=4, head='', title='Доступные команды:', tail='', keyboard=True, one_time=True, display=2, **kwargs): return send(peer_id, f"{head}\n\n{title}\n%s\n\n{tail}" % '\n'.join('%s — %s' % (i[0]+(' (%s)' % ', '.join(i[1:display])) if (display > 1) else '', i[-2]) for i in commands if i[-1] > -1), keyboard=mkkeyboard(commands if (keyboard) else {}, n, one_time=one_time) if (API.mode == 'group') else '', **kwargs) # •
-def mkkeyboard(commands, n=4, one_time=True):
+def mkkeyboard(commands, n=4, one_time=True, inline=False):
 	keyboard = {
 		'one_time': one_time,
+		'inline': inline,
 		'buttons': Slist({
 			'action': {
 				'type': 'text',
@@ -650,6 +651,7 @@ class lp(threading.Thread):
 	def get_lp(cls, mode, wait=25, version=lp_version, **kwargs):
 		parseargs(kwargs, nolog=True)
 		lp = API.groups.getLongPollServer(group_id=group.id, **kwargs) if (mode == 'group') else API.messages.getLongPollServer(lp_version=lp_version, **kwargs)
+		if (not isinstance(lp, dict)): raise WTFException(lp)
 		if ('https://' not in lp['server']): lp['server'] = 'https://'+lp['server']
 		return (cls.format_url(server=lp['server'], key=lp['key'], wait=wait), str(lp['ts']))
 
