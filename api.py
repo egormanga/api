@@ -70,15 +70,19 @@ def ret(method, data={}, *, wrap=False, max_tries=5, use_al=False, nolog=False):
 			res = (al if (not use_force_al_run and method.partition('.')[0] in use_al_php_methods) else al_run_method)(method, nolog=nolog, **data) if (use_al) else requests.post(f"https://api.vk.com/method/{method}", data=data).json()
 			if ('error' in res): raise \
 				VKAPIError(res['error'], method)
-			return res.get('response', res) if isinstance(res, dict) else res
+			return res.get('response', res) if (isinstance(res, dict)) else res
 		except (OSError, VKAPIError) as ex:
 			if (not wrap or (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
 def api(method, *, access_token='access_token', wrap=True, max_tries=5, nolog=False, **kwargs):
 	parseargs(kwargs, lang=locale.getlocale()[0].split('_')[0], v=api_version)
 	if (not method): return False
-	is_user = access_token != 'access_token' or API.mode == 'user'
-	parseargs(kwargs, access_token=tokens[access_token] if (access_token in tokens) else access_token)
+	if (access_token in tokens):
+		is_user = (tokens.mode[access_token] == 'user')
+		parseargs(kwargs, access_token=tokens[access_token])
+	else:
+		is_user = API.mode == 'user'
+		parseargs(kwargs, access_token=access_token)
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
 	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user and (use_force_al_run or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods)), nolog=nolog)
 	except VKAPIError as ex:
@@ -636,7 +640,7 @@ def setlp(**kwargs): parseargs(kwargs, enabled=1, message_new=1, group_id=group.
 lps = list()
 class lp(threading.Thread):
 	def __init__(self, lp_index=0, lp_timeout=1, mode=None, eq=None, **kwargs):
-		threading.Thread.__init__(self, daemon=True)
+		super().__init__(daemon=True)
 		self.lp_index, self.lp_timeout, self.mode, self.eq, self.kwargs = lp_index, lp_timeout, mode or API.mode, eq, kwargs
 		self.lp_url = [str(), str()]
 		self.stopped = threading.Event()
@@ -651,27 +655,31 @@ class lp(threading.Thread):
 	def get_lp(cls, mode, wait=25, version=lp_version, **kwargs):
 		parseargs(kwargs, nolog=True)
 		lp = API.groups.getLongPollServer(group_id=group.id, **kwargs) if (mode == 'group') else API.messages.getLongPollServer(lp_version=lp_version, **kwargs)
-		if (not isinstance(lp, dict)): raise WTFException(lp)
+		if (not isinstance(lp, dict)): raise VKAlLoginError(lp)
 		if ('https://' not in lp['server']): lp['server'] = 'https://'+lp['server']
 		return (cls.format_url(server=lp['server'], key=lp['key'], wait=wait), str(lp['ts']))
 
 	def run(self):
 		log(f"LP #{self.lp_index} Started.")
-		while (True):
+		while (not self.stopped.is_set()):
 			try:
-				if (not all(self.lp_url)): self.lp_url = list(self.get_lp(mode=self.mode, wait=self.lp_timeout, **self.kwargs))#; log(2, f"New LP Server: {str().join(self.lp_url)}")
+				if (not all(self.lp_url)):
+					self.lp_url = list(self.get_lp(mode=self.mode, wait=self.lp_timeout, **self.kwargs))
+					#log(2, f"New LP Server: {str().join(self.lp_url)}")
 				#log(3, f"New LP Request: {self.lp_url}")
 				try: a = requests.get(str().join(self.lp_url)).json()
 				except Exception as ex: a = dict(); logexception(LPError(ex))
 				else: self.lp_url[1] = str(a.get('ts'))
 				if (a.get('failed')): self.lp_url[0] = ''
-				for u in a.get('updates') or (): f_handle[self.lp_index](u)
+				for u in a.get('updates', ()):
+					f_handle[self.lp_index](u)
 				for i in range(len(f_proc)):
 					if (time.time()-f_proc[i][2] >= f_proc[i][1]): f_proc[i][2] = time.time(); f_proc[i][0]()
-				if (self.stopped.is_set()): break
 			except BaseException as ex:
 				if (self.eq): self.eq.put(ex)
 				else: raise
+				if (isinstance(ex, VKAlLoginError)):
+					while (not getvksid()): time.sleep(0.1)
 
 	def stop(self):
 		self.stopped.set()
@@ -701,7 +709,7 @@ class _Tokens:
 
 	def __init__(self, service_key=None):
 		self._tokens = dict()
-		if (service_key): self._tokens['service_key'] = {'token': api_service_key}
+		if (service_key): self._tokens['service_key'] = {'token': api_service_key, 'mode': None, 'scope': ()}
 
 	def __getstate__(self):
 		return self._tokens
@@ -739,6 +747,8 @@ class _Tokens:
 
 	def require(self, name, *scope, mode=None):
 		self._tokens[name] = {'mode': mode or API.mode, 'scope': set(), 'token': str()}
+		if (len(scope) == 1): scope = scope[0]
+		if (isinstance(scope, str)): scope = scope.split(',')
 		self._set_scope(name, *scope)
 
 	def increment_scope(self, name, *scope, nolog=True):
@@ -747,6 +757,10 @@ class _Tokens:
 
 	def discard(self, name):
 		self._tokens[name]['token'] = str()
+
+	@itemget
+	def mode(self, name):
+		return self._tokens[name]['mode']
 
 	@staticmethod
 	def format_link(mode, scope):
@@ -761,10 +775,10 @@ class _Tokens:
 		""".replace('\t', '').replace('\n', '')
 
 	def readtoken(self, name, link):
-		locklog()
 		logexception(Warning(f"Get new {name}: {link}"), nolog=True)
-		logdumb(unlock=loglock[-1][0])
-		return input(name+' = ')
+		locklog()
+		try: return input(name+' = ')
+		finally: unlocklog()
 
 	def onupdate(self):
 		pass
