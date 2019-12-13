@@ -122,9 +122,9 @@ def al_parse_audio(a):
 		'lyrics_id': a[al_audio_consts.AUDIO_ITEM_INDEX_LYRICS],
 		'album_id': a[al_audio_consts.AUDIO_ITEM_INDEX_ALBUM],
 		#'genre_id'
-		'is_hq': a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_HQ_BIT,
+		'is_hq': bool(a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_HQ_BIT),
 		'track_code': a[al_audio_consts.AUDIO_ITEM_INDEX_TRACK_CODE],
-		'is_explicit': a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_EXPLICIT_BIT,
+		'is_explicit': bool(a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_EXPLICIT_BIT),
 		'main_artists': a[al_audio_consts.AUDIO_ITEM_INDEX_MAIN_ARTISTS],
 		'featured_artists': a[al_audio_consts.AUDIO_ITEM_INDEX_FEAT_ARTISTS],
 		'subtitle': a[al_audio_consts.AUDIO_ITEM_INDEX_SUBTITLE],
@@ -196,15 +196,15 @@ def al_parse_message(m, parse_attachments=False):
 		'date': m[3],
 		'from_id': m[5].get('from') if (isinstance(m[5], dict)) else None,
 		'id': m[0],
-		'out': m[1] & +2,
+		'out': bool(m[1] & +2),
 		'peer_id': m[2],
 		'text': al_unhtml_text(m[4]),
 		'conversation_message_id': m[8],
 		#'fwd_messages'
-		'important': m[1] & +8,
+		'important': bool(m[1] & +8),
 		'random_id': m[7],
 		'attachments': al_parse_attachments(m[5]) if (parse_attachments) else [],
-		'is_hidden': m[1] & +65536,
+		'is_hidden': bool(m[1] & +65536),
 	}
 def al_parse_dialogs(kwargs, r):
 	r = tuple(map(json.loads, al_extract(r)))
