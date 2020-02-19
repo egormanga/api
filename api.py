@@ -187,8 +187,9 @@ def al_parse_audio_list(kwargs, r):
 	#for i in range(0, len(r['list']), 9): r['list'][i:i+10] = map(al_parse_audio, API.audio.getById(audios=','.join(map(al_parse_audio_id, r['list'][i:i+10])))) # too slow
 	return S(r).translate({'owner_id': 'ownerId', 'access_hash': 'accessHash', 'has_more': ('hasMore', bool), 'next_from': 'nextOffset'})
 def al_parse_audio_search(kwargs, r):
-	r['playlist'] = al_parse_audio_list(kwargs, r['playlist'])
-	r['playlists']['items'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']['items']))
+	r['playlist'] = al_parse_audio_list(kwargs, r['playlist']) if (r['playlist']) else {}
+	if (r['playlists']): r['playlists']['items'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']['items']))
+	else: r['playlists'] = {}
 	return S(r).with_('has_more', True) # TODO
 
 al_actions = {
