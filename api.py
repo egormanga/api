@@ -2,7 +2,7 @@
 # VK API lib
 
 import requests
-from .apiconf import app_id, dbg_user_id, api_service_key # custom global config file
+from .apiconf import app_id, dbg_user_id, api_service_key  # custom global config file
 from PIL import Image
 from utils.nolog import *; logstart('API')
 
@@ -24,10 +24,11 @@ def main():
 (not a bare minimum though) """
 
 api_version = '5.101'
-lp_version = '3'
+lp_version = '5'
 use_al_run_methods = ('messages', 'execute')
 use_al_php_methods = ('audio',)
 use_force_al_run = False
+dont_use_al = False
 
 class al_audio_consts:
 	AUDIO_ITEM_INDEX_ID = 0
@@ -67,27 +68,31 @@ def ret(method, data={}, *, wrap=False, max_tries=5, use_al=False, nolog=False):
 	for i in range(max_tries if (wrap) else 1):
 		time.sleep(i)
 		try:
-			res = (al if (not use_force_al_run and method.partition('.')[0] in use_al_php_methods) else al_run_method)(method, nolog=nolog, **data) if (use_al) else requests.post(f"https://api.vk.com/method/{method}", data=data).json()
+			if (use_al): res = (al if (not use_force_al_run and method.partition('.')[0] in use_al_php_methods) else al_run_method)(method, nolog=nolog, **data)
+			else: res = requests.post(f"https://api.vk.com/method/{method}", data=data).json()
 			if ('error' in res): raise \
 				VKAPIError(res['error'], method)
 			return res.get('response', res) if (isinstance(res, dict)) else res
 		except (OSError, VKAPIError) as ex:
 			if (not wrap or (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
-def api(method, *, access_token='access_token', wrap=True, max_tries=5, nolog=False, **kwargs):
+def api(method, *, access_token='access_token', wrap=True, max_tries=5, allow_al=True, nolog=False, **kwargs):
 	parseargs(kwargs, lang=locale.getlocale()[0].split('_')[0], v=api_version)
 	if (not method): return False
 	if (access_token in tokens):
-		is_user = (tokens.mode[access_token] == 'user')
+		is_user = (tokens.mode[access_token] != 'group')
+		use_al = use_force_al_run or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods)
 		parseargs(kwargs, access_token=tokens[access_token])
 	else:
-		is_user = API.mode == 'user'
+		is_user = (API.mode == 'user')
+		use_al = True # TODO
 		parseargs(kwargs, access_token=access_token)
+	if (dont_use_al or not allow_al): use_al = False
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
-	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user and (use_force_al_run or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods)), nolog=nolog)
+	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user and use_al, nolog=nolog)
 	except VKAPIError as ex:
-		if (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] in (3, 7, 15, 20, 21, 23, 28)):
-			r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=True, nolog=nolog)
+		if (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] in (7, 15, 20, 21, 23, 28)):
+			r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user, nolog=nolog)
 		else: raise
 	if (not nolog): log(3, f"Response: {r}")
 	return r
@@ -114,6 +119,7 @@ def al_parse_audio(a):
 		'is_hq': bool(a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_HQ_BIT),
 		'track_code': a[al_audio_consts.AUDIO_ITEM_INDEX_TRACK_CODE],
 		'is_explicit': bool(a[al_audio_consts.AUDIO_ITEM_INDEX_FLAGS] & al_audio_consts.AUDIO_ITEM_EXPLICIT_BIT),
+		'is_restricted': bool(a[al_audio_consts.AUDIO_ITEM_INDEX_RESTRICTION]),
 		'main_artists': a[al_audio_consts.AUDIO_ITEM_INDEX_MAIN_ARTISTS],
 		'featured_artists': a[al_audio_consts.AUDIO_ITEM_INDEX_FEAT_ARTISTS],
 		'subtitle': a[al_audio_consts.AUDIO_ITEM_INDEX_SUBTITLE],
@@ -126,6 +132,7 @@ def al_audio_eq(a, b): return al_audio_get_hash(a) == al_audio_get_hash(b)
 
 @cachedfunction
 def al_audio_get_url(user_id, a):
+	if (not a.get('hashes', {}).get('urlHash')): raise VKAlUrlError('no url')
 	if (not a.get('url')): a['url'] = API.audio.getById(audios=al_parse_audio_id(a))[0]['url']
 	a['url'] = al_audio_decode_url(user_id, a['url'])
 	return a['url']
@@ -180,7 +187,8 @@ def al_parse_audio_list(kwargs, r):
 	#for i in range(0, len(r['list']), 9): r['list'][i:i+10] = map(al_parse_audio, API.audio.getById(audios=','.join(map(al_parse_audio_id, r['list'][i:i+10])))) # too slow
 	return S(r).translate({'owner_id': 'ownerId', 'access_hash': 'accessHash', 'has_more': ('hasMore', bool), 'next_from': 'nextOffset'})
 def al_parse_audio_search(kwargs, r):
-	r['playlists'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']))
+	r['playlist'] = al_parse_audio_list(kwargs, r['playlist'])
+	r['playlists']['items'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']['items']))
 	return S(r).with_('has_more', True) # TODO
 
 al_actions = {
@@ -193,7 +201,7 @@ al_actions = {
 	'audio.getRecommendations': ('al_audio', 'recoms_blocks'),
 }
 al_params = {
-	'audio.get': lambda kwargs: {'owner_id': kwargs['owner_id'] if (kwargs.get('owner_id')) else user()[0]['id'], 'type': kwargs.get('type', kwargs['album_id'][:6] if (isinstance(kwargs['album_id'], str) and kwargs['album_id'][:6].isalpha()) else 'playlist'), 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), 'access_hash': kwargs.get('access_hash', '')},
+	'audio.get': lambda kwargs: {'owner_id': kwargs['owner_id'] if (kwargs.get('owner_id')) else user()[0]['id'], 'type': kwargs.get('type', kwargs['album_id'][:6] if (isinstance(kwargs.get('album_id', -1), str) and kwargs['album_id'][:6].isalpha()) else 'playlist'), 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), 'access_hash': kwargs.get('access_hash', '')},
 	'audio.search': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'section': 'search', 'q': kwargs.get('q', ''), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), **kwargs},
 	'audio.getById': lambda kwargs: S(kwargs).translate({'ids': 'audios'}), # audios: «{owner_id}_{track_id}_{actionHash}_{urlHash}»
 	'audio.getAlbums': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'section': kwargs.get('section', 'playlists'), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', '')},
@@ -507,7 +515,7 @@ def handle_command(t, m):
 def exec_command(f, c, m, t, *args, **kwargs):
 	fields = ('peer_id', 'from_id', 'text', 'attachments')
 	globals = f.__globals__
-	globals.update(S(m)(*fields)&S(locals())('c', 'm', 't'))
+	globals.update(S(m)(*fields) & S(locals())('c', 'm', 't'))
 	try: return f(*args, **kwargs)
 	finally:
 		for field in fields:
@@ -525,8 +533,8 @@ class lp(threading.Thread):
 		lps.append(self)
 
 	@staticmethod
-	def format_url(server, key, ts='', wait=25, version=lp_version):
-		return f"{server}?act=a_check&version={version}&key={key}&wait={wait}&ts={ts}"
+	def format_url(server, key, ts='', mode=8, wait=25, version=lp_version):  # mode=8 -- voip data (event 115)
+		return f"{server}?act=a_check&version={version}&key={key}&mode={mode}&wait={wait}&ts={ts}"
 
 	@classmethod
 	def get_lp(cls, mode, wait=25, version=lp_version, **kwargs):
@@ -547,7 +555,9 @@ class lp(threading.Thread):
 				try: a = requests.get(str().join(self.lp_url)).json()
 				except Exception as ex: a = dict(); logexception(LPError(ex))
 				else: self.lp_url[1] = str(a.get('ts'))
-				if (a.get('failed')): self.lp_url[0] = ''
+				if (a.get('failed', 0) > 1):
+					self.lp_url[0] = ''
+					log(3, f"LP Error: {a}")
 				for u in a.get('updates', ()):
 					f_handle[self.lp_index](u)
 				for i in range(len(f_proc)):
@@ -561,7 +571,7 @@ class lp(threading.Thread):
 	def stop(self):
 		self.stopped.set()
 
-class _Tokens:
+class _Tokens(metaclass=SlotsMeta):
 	_scope_mask = dict(
 		notify		= +1,
 		friends		= +2,
@@ -583,9 +593,10 @@ class _Tokens:
 		email		= +4194304,
 		market		= +134217728,
 	)
+	_tokens: dict
+	onupdate: noop
 
 	def __init__(self, service_key=None):
-		self._tokens = dict()
 		if (service_key): self._tokens['service_key'] = {'token': api_service_key, 'mode': None, 'scope': ()}
 
 	def __getstate__(self):
@@ -602,7 +613,14 @@ class _Tokens:
 			self.onupdate()
 		return self._tokens[name]['token']
 
+	def __setattr__(self, name, token):
+		try: return object.__setattr__(self, name, token)
+		except AttributeError: pass
+		try: self._tokens[name]['token'] = token
+		except KeyError as ex: raise AttributeError(*ex.args)
+
 	__getitem__ = __getattr__
+	__setitem__ = __setattr__
 
 	def __contains__(self, name):
 		return name in self._tokens
@@ -657,8 +675,6 @@ class _Tokens:
 		try: return input(name+' = ')
 		finally: unlocklog()
 
-	def onupdate(self):
-		pass
 access_token, admin_token, service_key = 'access_token', 'admin_token', 'service_key'
 group_scope_all = 'manage,messages,photos,docs,wall'
 
@@ -732,7 +748,9 @@ class VKAPIError(Warning):
 		return res.strip(': ') or ' '.join(map(str, self.args)) or 'Unknown Error'
 class VKKeyboardError(Exception): pass
 class LPError(VKError, NonLoggingException): pass
-class VKAlLoginError(VKError): pass
+class VKAlError(VKError): pass
+class VKAlLoginError(VKAlError): pass
+class VKAlUrlError(VKAlError): pass
 
 class _group:
 	def __init__(self):
@@ -785,4 +803,4 @@ if (__name__ == '__main__'):
 		except KeyboardInterrupt as ex: exit(ex)
 else: logimported()
 
-# by Sdore, 2019
+# by Sdore, 2020
