@@ -607,6 +607,7 @@ class _Tokens(metaclass=SlotsMeta):
 		self._tokens = tokens
 
 	def __getattr__(self, name):
+		if (name in self.__slots__): return object.__getattribute__(self, name)
 		if (not self._tokens[name]['token']):
 			mode, scope = S(self._tokens[name])@['mode', 'scope']
 			self._tokens[name]['token'] = self.readtoken(name, self.format_link(mode, scope))
