@@ -64,11 +64,11 @@ class al_audio_consts:
 	AUDIO_ITEM_EXPLICIT_BIT = 1024
 
 
-def ret(method, data={}, *, wrap=False, max_tries=5, use_al=False, nolog=False):
+def ret(method, data={}, *, wrap=False, max_tries=5, use_al=False, force_al_run=False, vk_sid_=None, nolog=False):
 	for i in range(max_tries if (wrap) else 1):
 		time.sleep(i)
 		try:
-			if (use_al): res = (al if (not use_force_al_run and method.partition('.')[0] in use_al_php_methods) else al_run_method)(method, nolog=nolog, **data)
+			if (use_al): res = (al if (not (use_force_al_run or force_al_run) and method.partition('.')[0] in use_al_php_methods) else al_run_method)(method, vk_sid_=vk_sid_, nolog=nolog, **data)
 			else: res = requests.post(f"https://api.vk.com/method/{method}", data=data).json()
 			if ('error' in res): raise \
 				VKAPIError(res['error'], method)
@@ -76,12 +76,12 @@ def ret(method, data={}, *, wrap=False, max_tries=5, use_al=False, nolog=False):
 		except (OSError, VKAPIError) as ex:
 			if (not wrap or (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] not in (6, 10, 14))): raise
 
-def api(method, *, access_token='access_token', wrap=True, max_tries=5, allow_al=True, nolog=False, **kwargs):
+def api(method, *, access_token='access_token', wrap=True, max_tries=5, allow_al=True, force_al_run=False, vk_sid_=None, nolog=False, **kwargs):
 	parseargs(kwargs, lang=locale.getlocale()[0].split('_')[0], v=api_version)
 	if (not method): return False
 	if (access_token in tokens):
 		is_user = (tokens.mode[access_token] != 'group')
-		use_al = use_force_al_run or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods)
+		use_al = (use_force_al_run or force_al_run) or (method.partition('.')[0] in use_al_php_methods+use_al_run_methods)
 		parseargs(kwargs, access_token=tokens[access_token])
 	else:
 		is_user = (API.mode == 'user')
@@ -89,10 +89,10 @@ def api(method, *, access_token='access_token', wrap=True, max_tries=5, allow_al
 		parseargs(kwargs, access_token=access_token)
 	if (dont_use_al or not allow_al): use_al = False
 	if (not nolog): log(2, f"Request: method={method}, data={kwargs}")
-	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user and use_al, nolog=nolog)
+	try: r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user and use_al, force_al_run=use_force_al_run or force_al_run, vk_sid_=vk_sid_, nolog=nolog)
 	except VKAPIError as ex:
 		if (isinstance(ex, VKAPIError) and ex.args[0]['error_code'] in (7, 15, 20, 21, 23, 28)):
-			r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user, nolog=nolog)
+			r = ret(method=method, data=kwargs, wrap=wrap, max_tries=max_tries, use_al=is_user, force_al_run=use_force_al_run or force_al_run, vk_sid_=vk_sid_, nolog=nolog)
 		else: raise
 	if (not nolog): log(3, f"Response: {r}")
 	return r
@@ -131,9 +131,9 @@ def al_audio_get_hash(a): return hash(f"{a.get('owner_id')}_{a.get('id')}_{a.get
 def al_audio_eq(a, b): return al_audio_get_hash(a) == al_audio_get_hash(b)
 
 @cachedfunction
-def al_audio_get_url(user_id, a):
+def al_audio_get_url(user_id, a, **kwargs):
 	if (not a.get('hashes', {}).get('urlHash')): raise VKAlUrlError('no url')
-	if (not a.get('url')): a['url'] = API.audio.getById(audios=al_parse_audio_id(a))[0]['url']
+	if (not a.get('url')): a['url'] = API.audio.getById(audios=al_parse_audio_id(a), **kwargs)[0]['url']
 	a['url'] = al_audio_decode_url(user_id, a['url'])
 	return a['url']
 def al_audio_decode_url(user_id, url):
@@ -188,7 +188,7 @@ def al_parse_audio_list(kwargs, r):
 	return S(r).translate({'owner_id': 'ownerId', 'access_hash': 'accessHash', 'has_more': ('hasMore', bool), 'next_from': 'nextOffset'})
 def al_parse_audio_search(kwargs, r):
 	r['playlist'] = al_parse_audio_list(kwargs, r['playlist']) if (r['playlist']) else {}
-	if (r['playlists']): r['playlists']['items'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']['items']))
+	if (r['playlists']): r['playlists'] = list(map(lambda x: al_parse_audio_list(kwargs, x), r['playlists']))
 	else: r['playlists'] = {}
 	return S(r).with_('has_more', True) # TODO
 
@@ -202,7 +202,7 @@ al_actions = {
 	'audio.getRecommendations': ('al_audio', 'recoms_blocks'),
 }
 al_params = {
-	'audio.get': lambda kwargs: {'owner_id': kwargs['owner_id'] if (kwargs.get('owner_id')) else user()[0]['id'], 'type': kwargs.get('type', kwargs['album_id'][:6] if (isinstance(kwargs.get('album_id', -1), str) and kwargs['album_id'][:6].isalpha()) else 'playlist'), 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), 'access_hash': kwargs.get('access_hash', '')},
+	'audio.get': lambda kwargs: {'owner_id': kwargs['owner_id'] if (kwargs.get('owner_id')) else user(force_al_run=True)[0]['id'], 'type': kwargs.get('type', kwargs['album_id'][:6] if (isinstance(kwargs.get('album_id', -1), str) and kwargs['album_id'][:6].isalpha()) else 'playlist'), 'playlist_id': kwargs.get('album_id', -1), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), 'access_hash': kwargs.get('access_hash', '')},
 	'audio.search': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'section': 'search', 'q': kwargs.get('q', ''), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', ''), **kwargs},
 	'audio.getById': lambda kwargs: S(kwargs).translate({'ids': 'audios'}), # audios: «{owner_id}_{track_id}_{actionHash}_{urlHash}»
 	'audio.getAlbums': lambda kwargs: {'owner_id': kwargs.get('owner_id', ''), 'section': kwargs.get('section', 'playlists'), 'offset': kwargs.get('offset', 0), 'count': kwargs.get('count', '')},
@@ -238,7 +238,7 @@ def al_run_method(method, vk_sid_=None, nolog=False, **kwargs):
 	if (vk_sid_ is None): vk_sid_ = vk_sid
 	if (not vk_sid_): raise VKAlLoginError()
 	data = {'param_'+k: v for k, v in kwargs.items() if k != 'method'}
-	parseargs(data, method=method, hash=al_get_run_hash(method))
+	parseargs(data, method=method, hash=al_get_run_hash(method, vk_sid_=vk_sid_))
 	if (not nolog): log(2, f"Al Dev Request: method={method}, data={data}")
 	try: r = requests.post(f"https://vk.com/dev.php?act=a_run_method&al=1", data=data, headers={'X-Requested-With': 'XMLHttpRequest'}, cookies={'remixsid': vk_sid_}); assert r.ok
 	except Exception as ex: raise VKAPIError({'error_code': 0}, method) from ex
@@ -253,6 +253,7 @@ def al_login(login, password):
 	s.post(bs4.BeautifulSoup(s.get('https://m.vk.com/login').text, 'html.parser').form['action'], data={'email': login, 'pass': password})
 	if ('remixsid' not in s.cookies): raise VKAlLoginError('Incorrect login')
 	vk_sid = s.cookies['remixsid']
+	return vk_sid
 def al_login_stdin(): return al_login(input('VK Login: '), getpass.getpass())
 def al_get_lp(vk_sid_=None):
 	if (vk_sid_ is None): vk_sid_ = vk_sid
@@ -261,8 +262,9 @@ def al_get_lp(vk_sid_=None):
 	def extract(x): return re.search(rf'''['"]?{x}['"]?:\ ?['"]?([\w.:/]+)['"]?''', r[1])[1]
 	return {'server': extract('url'), 'key': extract('key'), 'ts': extract('ts')}
 @cachedfunction
-def al_get_run_hash(method):
-	r = re.search(r"Dev\.\w+?\('(\d+:[\w\d]+)'.*?\)", requests.get(f"https://vk.com/dev/{method}", cookies={'remixsid': vk_sid}, allow_redirects=False).text)
+def al_get_run_hash(method, vk_sid_=None):
+	if (vk_sid_ is None): vk_sid_ = vk_sid
+	r = re.search(r"Dev\.\w+?\('(\d+:[\w\d]+)'.*?\)", requests.get(f"https://vk.com/dev/{method}", cookies={'remixsid': vk_sid_}, allow_redirects=False).text)
 	if (r is None): raise VKAlLoginError()
 	return r.group(1)
 
