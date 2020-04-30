@@ -131,11 +131,11 @@ def al_audio_get_hash(a): return hash(f"{a.get('owner_id')}_{a.get('id')}_{a.get
 def al_audio_eq(a, b): return al_audio_get_hash(a) == al_audio_get_hash(b)
 
 @cachedfunction
-def al_audio_get_url(user_id, a, **kwargs):
+def al_audio_get_url(user_id, a, *, mp3=True, **kwargs):
 	if (not a.get('hashes', {}).get('urlHash')): raise VKAlUrlError('no url')
 	if (not a.get('url')): a['url'] = API.audio.getById(audios=al_parse_audio_id(a), **kwargs)[0]['url']
 	a['url'] = al_audio_decode_url(user_id, a['url'])
-	if ('.m3u' in a['url']): a['url'] = str().join((*re.match(r'^(https?:/(?:/[^/]+){2}/)[^/]+/([^/]+)', a['url'], re.X).groups(), '.mp3'))
+	if (mp3 and 'index.' in a['url']): a['url'] = str().join((*re.match(r'^(https?:/(?:/[^/]+)+?/) [^/]+/ ((?:audios/)?[^/]+)/index\.', a['url'], re.X).groups(), '.mp3'))
 	return a['url']
 def al_audio_decode_url(user_id, url):
 	if ('audio_api_unavailable' not in url): return url
