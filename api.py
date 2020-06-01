@@ -30,6 +30,7 @@ use_al_php_methods = ('audio',)
 use_force_al_run = False
 dont_use_al = False
 
+@singleton
 class al_audio_consts:
 	AUDIO_ITEM_INDEX_ID = 0
 	AUDIO_ITEM_INDEX_OWNER_ID = 1
@@ -615,7 +616,7 @@ class _Tokens(metaclass=SlotsMeta):
 			mode, scope = S(self._tokens[name])@['mode', 'scope']
 			self._tokens[name]['token'] = self.readtoken(name, self.format_link(mode, scope))
 			if (self._tokens[name]['mode'] == 'user'): self._set_scope(name, *self._parse_mask(API.account.getAppPermissions(access_token=name)))
-			self.onupdate()
+			if (self.onupdate is not None): self.onupdate()
 		return self._tokens[name]['token']
 
 	def __setattr__(self, name, token):
