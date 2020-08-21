@@ -784,6 +784,7 @@ def set_dbg_user_id(x): global dbg_user_id; dbg_user_id = x
 
 tokens = _Tokens(service_key=service_key)
 db.register('tokens', 'vk_sid')
+db.setsensitive(True)
 API = _API()
 send = _send()
 group = _group()
