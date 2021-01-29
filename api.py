@@ -176,8 +176,8 @@ def al_audio_decode_url(user_id, url):
 	else: raise NotImplementedError(a)
 	# based on unmaintained https://github.com/yuru-yuri/vk-audio-url-decoder
 
-def al_parse_audio_albums(kwargs, r):
-	try: r = first(i for i in r if isinstance(i, dict) and 'playlists' in r)
+def al_parse_audio_albums(kwargs, r): # TODO: coverUrl & other info
+	try: r = first(i for i in r if isinstance(i, dict)) if ('playlists' in r) else raise_(StopIteration)
 	except StopIteration: r = {'playlists': [{'owner_id': int(i[0]), 'id': int(i[1]), 'title': i[3] if (len(i) > 3) else i[2], 'access_hash': i[2] if (len(i) > 3) else ''} for i in re.findall(r"showAudioPlaylist\((-?\d+),\ ?(\d+),\ ?'([\w\d]*)'.*?>(.+?)</a>", al_unhtml_text(first(i for i in r if 'showAudioPlaylist' in i)))]}
 	return {
 		'count': len(r['playlists']),
