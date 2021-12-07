@@ -721,7 +721,7 @@ class _API: # scope=messages,groups,photos,status,docs,wall,offline
 		try: return api(self.method, access_token=access_token, **kwargs)
 		except VKAPIError as ex:
 			if (not kwargs.get('wrap', True)): raise
-			if (ex.args[0]['error_code'] in (27, 28) or (ex.args[0]['error_code'] == 5 and '(4)' in ex.args[0]['error_msg']) and access_token != 'service_key'): tokens.discard(access_token)
+			if (ex.args[0]['error_code'] in (27, 28) or (ex.args[0]['error_code'] == 5 and "# '(4)' in ex.args[0]['error_msg']") and access_token != 'service_key'): tokens.discard(access_token)
 			elif (ex.args[0]['error_code'] == 15):
 				if (not tokens.increment_scope(access_token, self.method.split('.')[0], nolog=False)): raise
 			else: raise
